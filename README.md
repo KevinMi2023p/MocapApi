@@ -1,5 +1,23 @@
 # MocapApi
 
+## Mocap Studio for macOS and Linux
+
+This development branch adds **Mocap Studio**, an independent Axis-inspired
+operator console for standard BVH streams. It provides a live 3D skeleton,
+provider-aware capture controls, sensor/scene inspection, diagnostics, and
+crash-recoverable local takes through the same browser-based interface on macOS
+and Linux.
+
+See [the Mocap Studio guide](studio/README.md) for installation, Axis broadcast
+setup, supported features, tests, and the compatibility roadmap.
+
+> **License boundary:** the new Mocap Studio application is Apache-2.0, but that
+> does not relicense the surrounding upstream MocapApi snapshot. The audited
+> upstream snapshot has no root license file. Studio release archives therefore
+> use an explicit allow-list and exclude all upstream native libraries, headers,
+> demos, and documentation. Details are in
+> [the third-party notices](studio/THIRD_PARTY_NOTICES.md).
+
 **MocapApi** is Noitom's next-generation programming interface for consuming real-time
 motion-capture data streamed from **Axis Studio** and other Noitom
 software. It is the successor to the legacy *NeuronDataReader (NDR)* and was designed
