@@ -18,6 +18,7 @@ from .providers import (
     Provider,
     ProviderConnectionError,
     ProviderError,
+    ProviderStreamIdle,
 )
 from .recording import TakeRecorder, default_library_dir
 
@@ -35,6 +36,7 @@ class StudioController:
         self._frame_intervals: deque[float] = deque(maxlen=120)
         self._byte_samples: deque[tuple[float, int]] = deque(maxlen=240)
         self._session_started = 0.0
+        self._stream_idle = False
         self.recorder = TakeRecorder(library_dir or default_library_dir())
         try:
             recovered = self.recorder.recover_interrupted()
@@ -173,7 +175,12 @@ class StudioController:
                     {"status": "disconnected", "message": "Ready"}
                 )
                 self._state["session"].update(
-                    {"capturing": False, "recording": False, "elapsedMs": 0}
+                    {
+                        "capturing": False,
+                        "recording": False,
+                        "recordingTarget": None,
+                        "elapsedMs": 0,
+                    }
                 )
                 self._state["capabilities"] = _disconnected_capabilities()
                 self._add_event("info", "Connection", "Source disconnected", publish=False)
@@ -201,6 +208,8 @@ class StudioController:
                 provider = self._provider
                 capabilities = self._state["capabilities"].copy()
                 default_take_name = self._state["session"]["takeName"]
+                session_recording = bool(self._state["session"]["recording"])
+                recording_target = self._state["session"]["recordingTarget"]
             if provider is None:
                 raise ProviderError("Connect a source before sending commands")
 
@@ -212,7 +221,23 @@ class StudioController:
                     else "axis"
                 )
             else:
-                target = str(requested_target)
+                target = str(requested_target).strip().lower()
+            if name in {"start_record", "stop_record"} and target not in {
+                "local",
+                "axis",
+            }:
+                raise ProviderError("Recording target must be local or axis")
+            if name == "start_record" and (session_recording or self.recorder.active):
+                active_target = recording_target or (
+                    "local" if self.recorder.active else "unknown"
+                )
+                raise ProviderError(f"A {active_target} recording is already active")
+            if name == "stop_record" and target != recording_target:
+                if recording_target is None:
+                    raise ProviderError("No recording is currently active")
+                raise ProviderError(
+                    f"Cannot stop {target} recording while {recording_target} recording is active"
+                )
             if name == "start_record" and target == "local":
                 if not capabilities.get("localRecording"):
                     raise ProviderError("Local recording is not available for this source")
@@ -224,6 +249,7 @@ class StudioController:
                     self._state["session"].update(
                         {
                             "recording": True,
+                            "recordingTarget": "local",
                             "capturing": True,
                             "takeName": take_name,
                             "elapsedMs": 0,
@@ -275,14 +301,27 @@ class StudioController:
                     self._session_started = time.monotonic()
                     self._state["session"].update({"capturing": True, "elapsedMs": 0})
                 elif name == "stop_capture":
-                    self._state["session"].update({"capturing": False, "recording": False})
+                    self._state["session"].update(
+                        {
+                            "capturing": False,
+                            "recording": False,
+                            "recordingTarget": None,
+                        }
+                    )
                 elif name == "start_record":
                     self._session_started = time.monotonic()
                     self._state["session"].update(
-                        {"recording": True, "capturing": True, "elapsedMs": 0}
+                        {
+                            "recording": True,
+                            "recordingTarget": "axis",
+                            "capturing": True,
+                            "elapsedMs": 0,
+                        }
                     )
                 elif name == "stop_record":
-                    self._state["session"]["recording"] = False
+                    self._state["session"].update(
+                        {"recording": False, "recordingTarget": None}
+                    )
                 self._add_event("success", "Command", message, publish=False)
                 self._publish_locked(force=True)
             return message
@@ -372,7 +411,9 @@ class StudioController:
         saved = f"Saved {completed.name} ({completed.frames} frames)"
         message = f"{prefix}; {saved}" if prefix else saved
         with self._lock:
-            self._state["session"]["recording"] = False
+            self._state["session"].update(
+                {"recording": False, "recordingTarget": None}
+            )
             if stop_capture:
                 self._state["session"]["capturing"] = False
             self._state["takes"] = self.recorder.list_takes()
@@ -387,6 +428,7 @@ class StudioController:
         with self._lock:
             if self._provider is not provider:
                 return
+            self._stream_idle = False
             # Demo owns its simulated calibration state. Standard BVH contains
             # solved motion but no calibration-status field, so that state is
             # deliberately unknown instead of inferred from frame arrival.
@@ -442,6 +484,34 @@ class StudioController:
             self._publish_locked(force=False)
 
     def _on_provider_error(self, provider: Provider, error: Exception) -> None:
+        if isinstance(error, ProviderStreamIdle):
+            with self._lock:
+                if self._provider is not provider or self._stream_idle:
+                    return
+                self._stream_idle = True
+                # These are live-rate indicators, so retaining the last values
+                # during a stopped broadcast would falsely imply fresh motion.
+                self._last_frame_monotonic.clear()
+                self._frame_intervals.clear()
+                self._byte_samples.clear()
+                diagnostics = self._state["diagnostics"]
+                diagnostics.update(
+                    {
+                        "packetsPerSecond": 0.0,
+                        "bytesPerSecond": 0,
+                        "jitterMs": 0.0,
+                    }
+                )
+                for avatar in self._state["avatars"]:
+                    avatar["fps"] = 0.0
+                for sensor in self._state["sensors"]:
+                    if "packetRate" in sensor:
+                        sensor["packetRate"] = 0
+                self._state["connection"]["message"] = str(error)
+                self._add_event("warning", "Provider", str(error), publish=False)
+                self._publish_locked(force=True)
+            return
+
         if not isinstance(error, ProviderConnectionError):
             with self._lock:
                 if self._provider is not provider:
@@ -498,7 +568,12 @@ class StudioController:
                 {"status": "error", "message": str(error)}
             )
             self._state["session"].update(
-                {"capturing": False, "recording": False, "elapsedMs": 0}
+                {
+                    "capturing": False,
+                    "recording": False,
+                    "recordingTarget": None,
+                    "elapsedMs": 0,
+                }
             )
             self._state["capabilities"] = _disconnected_capabilities()
             self._add_event("error", "Provider", str(error), publish=False)
@@ -529,6 +604,7 @@ class StudioController:
             )
 
     def _reset_stream_tracking_locked(self) -> None:
+        self._stream_idle = False
         self._last_frame_monotonic.clear()
         self._last_source_frame.clear()
         self._frame_intervals.clear()
@@ -579,6 +655,7 @@ def _initial_state() -> dict[str, Any]:
         "session": {
             "capturing": False,
             "recording": False,
+            "recordingTarget": None,
             "takeName": "take001",
             "elapsedMs": 0,
         },

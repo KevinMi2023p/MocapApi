@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import socket
 import struct
 import threading
@@ -23,6 +24,7 @@ from .base import (
     ProviderCapabilities,
     ProviderConnectionError,
     ProviderError,
+    ProviderStreamIdle,
 )
 
 
@@ -35,6 +37,10 @@ LEGACY_HEADER = struct.Struct("<H4BIiiI32sIIH")
 MODERN_HEADER = struct.Struct("<H4BHBBI32sIIIIH")
 MAX_FRAME_VALUES = 4096
 MAX_STRING_BUFFER = 2 * 1024 * 1024
+# Long enough to tolerate ordinary packet jitter, while promptly clearing
+# health rates when an Axis UDP broadcast stops. The receive socket wakes every
+# 0.5 seconds, so no separate watchdog thread is required.
+UDP_IDLE_TIMEOUT_SECONDS = 2.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -460,16 +466,24 @@ class BvhProvider(Provider):
         port: int,
         rotation_order: str = "YXZ",
         source_unit: Literal["meters", "centimeters"] = "centimeters",
+        idle_timeout: float = UDP_IDLE_TIMEOUT_SECONDS,
     ) -> None:
         if not 1 <= port <= 65535:
             raise ProviderError("Port must be between 1 and 65535")
         if rotation_order not in {"XYZ", "XZY", "YXZ", "YZX", "ZXY", "ZYX"}:
             raise ProviderError("Unsupported BVH rotation order")
+        try:
+            idle_timeout = float(idle_timeout)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ProviderError("UDP idle timeout must be a finite positive number") from error
+        if not math.isfinite(idle_timeout) or idle_timeout <= 0.0:
+            raise ProviderError("UDP idle timeout must be greater than zero")
         self.transport = transport
         self.host = host
         self.port = port
         self.rotation_order = rotation_order
         self.source_unit = source_unit
+        self.idle_timeout = idle_timeout
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._socket: socket.socket | None = None
@@ -516,6 +530,24 @@ class BvhProvider(Provider):
         decoder = BvhStreamDecoder()
         frame_numbers: dict[int, int] = {}
         last_error_at = 0.0
+        last_valid_frame_at: float | None = None
+        idle_reported = False
+
+        def report_udp_idle_if_due() -> None:
+            nonlocal idle_reported
+            if (
+                self.transport == "udp"
+                and last_valid_frame_at is not None
+                and not idle_reported
+                and time.monotonic() - last_valid_frame_at >= self.idle_timeout
+            ):
+                idle_reported = True
+                on_error(
+                    ProviderStreamIdle(
+                        "BVH UDP stream stalled; waiting for frames to resume"
+                    )
+                )
+
         while not self._stop.is_set():
             try:
                 if self._socket is None:
@@ -525,6 +557,7 @@ class BvhProvider(Provider):
                     if self.transport == "tcp":
                         on_error(ProviderConnectionError("BVH TCP peer closed the connection"))
                         break
+                    report_udp_idle_if_due()
                     continue
                 wire_frames: Iterable[WireFrame] = decoder.feed(
                     data, datagram=self.transport == "udp"
@@ -532,16 +565,21 @@ class BvhProvider(Provider):
                 for wire_frame in wire_frames:
                     next_number = frame_numbers.get(wire_frame.avatar_index, 0) + 1
                     frame_numbers[wire_frame.avatar_index] = next_number
-                    on_frame(
-                        normalize_wire_frame(
-                            wire_frame,
-                            next_number,
-                            rotation_order=self.rotation_order,
-                            source_unit=self.source_unit,
-                        )
+                    motion_frame = normalize_wire_frame(
+                        wire_frame,
+                        next_number,
+                        rotation_order=self.rotation_order,
+                        source_unit=self.source_unit,
                     )
+                    last_valid_frame_at = time.monotonic()
+                    idle_reported = False
+                    on_frame(motion_frame)
+                # A continuous stream of malformed datagrams can prevent recv
+                # timeouts forever, so evaluate the valid-frame deadline after
+                # processing every datagram too.
+                report_udp_idle_if_due()
             except socket.timeout:
-                continue
+                report_udp_idle_if_due()
             except OSError as error:
                 if self._stop.is_set():
                     break
@@ -557,4 +595,5 @@ class BvhProvider(Provider):
                 if now - last_error_at >= 2.0:
                     on_error(error)
                     last_error_at = now
+                report_udp_idle_if_due()
         self._stop.set()

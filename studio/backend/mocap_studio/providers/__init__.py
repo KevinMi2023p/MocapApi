@@ -6,6 +6,7 @@ from .base import (
     ProviderCapabilities,
     ProviderConnectionError,
     ProviderError,
+    ProviderStreamIdle,
 )
 from .bvh import BvhProvider
 from .demo import DemoProvider
@@ -18,4 +19,5 @@ __all__ = [
     "ProviderCapabilities",
     "ProviderConnectionError",
     "ProviderError",
+    "ProviderStreamIdle",
 ]

@@ -78,6 +78,10 @@ class ProviderConnectionError(ProviderError):
     """The provider's transport ended and cannot continue receiving frames."""
 
 
+class ProviderStreamIdle(ProviderError):
+    """A live, nonterminal provider stream has temporarily stopped producing data."""
+
+
 class Provider(ABC):
     mode: Literal["demo", "bvh", "mocap-api"]
     capabilities: ProviderCapabilities

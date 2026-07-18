@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import math
+import socket
 import struct
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
-from mocap_studio.providers.base import ProviderError
-from mocap_studio.providers.base import ProviderConnectionError
+from mocap_studio.providers.base import (
+    ProviderConnectionError,
+    ProviderError,
+    ProviderStreamIdle,
+)
 from mocap_studio.providers.bvh import (
     LEGACY_END_TOKEN,
     LEGACY_HEADER,
@@ -164,6 +169,20 @@ class ScriptedSocket:
         return result
 
 
+class TimedScriptedSocket(ScriptedSocket):
+    def __init__(self, clock, results):
+        super().__init__(results)
+        self.clock = clock
+
+    def recv(self, size):
+        at, result = self.results.pop(0)
+        self.calls += 1
+        self.clock[0] = at
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
 class BvhProviderLifecycleTests(unittest.TestCase):
     def provider(self, transport: str):
         from mocap_studio.providers.bvh import BvhProvider
@@ -199,6 +218,84 @@ class BvhProviderLifecycleTests(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertNotIsInstance(errors[0], ProviderConnectionError)
         self.assertEqual(frames[0].source_frame_index, 9)
+
+    def test_udp_idle_watchdog_warns_once_and_rearms_after_valid_frame(self) -> None:
+        provider = self.provider("udp")
+        provider.idle_timeout = 2.0
+        clock = [0.0]
+        provider._socket = TimedScriptedSocket(
+            clock,
+            [
+                (0.0, modern_packet([0.0] * 180, frame=9)),
+                (3.0, socket.timeout()),
+                (4.0, socket.timeout()),
+                (5.0, modern_packet([0.0] * 180, frame=10)),
+                (8.0, socket.timeout()),
+            ]
+        )
+        errors = []
+        frames = []
+
+        def report(error):
+            errors.append(error)
+            if len(errors) == 2:
+                provider._stop.set()
+
+        # Valid-frame timestamps are 0 and 5. The first timeout at 3 reports
+        # idle; its duplicate is suppressed. A valid frame rearms at 5.
+        with patch(
+            "mocap_studio.providers.bvh.time.monotonic",
+            side_effect=lambda: clock[0],
+        ):
+            provider._run(frames.append, report)
+
+        self.assertEqual(len(frames), 2)
+        self.assertEqual(len(errors), 2)
+        self.assertTrue(all(isinstance(error, ProviderStreamIdle) for error in errors))
+        self.assertFalse(any(isinstance(error, ProviderConnectionError) for error in errors))
+
+    def test_malformed_udp_traffic_cannot_mask_valid_frame_idle(self) -> None:
+        provider = self.provider("udp")
+        provider.idle_timeout = 2.0
+        clock = [0.0]
+        provider._socket = TimedScriptedSocket(
+            clock,
+            [
+                (0.0, modern_packet([0.0] * 180, frame=9)),
+                (0.75, b"bad packet"),
+                (1.5, b"bad packet"),
+                (2.1, b"bad packet"),
+            ],
+        )
+        errors = []
+
+        def report(error):
+            errors.append(error)
+            if isinstance(error, ProviderStreamIdle):
+                provider._stop.set()
+
+        with patch(
+            "mocap_studio.providers.bvh.time.monotonic",
+            side_effect=lambda: clock[0],
+        ):
+            provider._run(lambda _frame: None, report)
+
+        idle = [error for error in errors if isinstance(error, ProviderStreamIdle)]
+        self.assertEqual(len(idle), 1)
+        self.assertFalse(any(isinstance(error, ProviderConnectionError) for error in errors))
+
+    def test_udp_initial_wait_does_not_emit_idle_warning(self) -> None:
+        provider = self.provider("udp")
+
+        class InitialWaitSocket:
+            def recv(inner_self, _size):
+                provider._stop.set()
+                raise socket.timeout()
+
+        provider._socket = InitialWaitSocket()
+        errors = []
+        provider._run(lambda _frame: self.fail("unexpected frame"), errors.append)
+        self.assertEqual(errors, [])
 
 
 class NormalizeTests(unittest.TestCase):

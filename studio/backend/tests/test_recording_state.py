@@ -19,15 +19,29 @@ from mocap_studio.providers.base import (
     ProviderCapabilities,
     ProviderConnectionError,
     ProviderError,
+    ProviderStreamIdle,
 )
 from mocap_studio.providers.bvh import BvhProvider
 from mocap_studio.recording import TakeLibraryBusyError, TakeRecorder, sanitize_take_name
 from mocap_studio.state import StudioController
 
 
-def frame(number: int = 1, source: int | None = None) -> MotionFrame:
+def frame(
+    number: int = 1,
+    source: int | None = None,
+    *,
+    source_bytes: int = 0,
+) -> MotionFrame:
     joint = JointPose("Hips", "Hips", None, (0, 1, 0), (0, 0, 0, 1))
-    return MotionFrame("avatar", "Actor", number, 1.0, (joint,), source_frame_index=source)
+    return MotionFrame(
+        "avatar",
+        "Actor",
+        number,
+        1.0,
+        (joint,),
+        source_bytes=source_bytes,
+        source_frame_index=source,
+    )
 
 
 class RecorderTests(unittest.TestCase):
@@ -261,11 +275,15 @@ class ControllerTests(unittest.TestCase):
                 controller.command("start_record", {"target": "local", "takeName": "one"}),
                 "Local recording started",
             )
+            self.assertEqual(
+                controller.snapshot()["session"]["recordingTarget"], "local"
+            )
             controller._on_frame(frame(1, 10))
             controller._on_frame(frame(2, 13))
             controller._on_frame(frame(3, 2))  # reset, not a 2^32-sized gap
             self.assertEqual(controller.snapshot()["diagnostics"]["droppedFrames"], 2)
             self.assertIn("Saved", controller.command("stop_record", {"target": "local"}))
+            self.assertIsNone(controller.snapshot()["session"]["recordingTarget"])
             self.assertEqual(len(controller.snapshot()["takes"]), 1)
             controller.close()
 
@@ -403,11 +421,15 @@ class ControllerTests(unittest.TestCase):
             self.assertTrue(controller.snapshot()["avatars"][0]["calibrated"])
             self.assertIsNone(controller.snapshot()["diagnostics"]["latencyMs"])
             controller.command("start_record", {"target": "local", "takeName": "demo"})
+            self.assertEqual(
+                controller.snapshot()["session"]["recordingTarget"], "local"
+            )
             controller._on_frame(frame())
             message = controller.command("stop_capture", {})
             self.assertIn("Saved", message)
             self.assertFalse(controller.recorder.active)
             self.assertFalse(controller.snapshot()["session"]["recording"])
+            self.assertIsNone(controller.snapshot()["session"]["recordingTarget"])
             self.assertEqual(len(controller.snapshot()["takes"]), 1)
             controller.close()
 
@@ -424,10 +446,78 @@ class ControllerTests(unittest.TestCase):
             with self.assertRaisesRegex(ProviderError, "receive-only"):
                 controller.command("start_capture", {})
             controller.command("start_record", {"target": "local", "takeName": "bvh"})
+            self.assertEqual(
+                controller.snapshot()["session"]["recordingTarget"], "local"
+            )
             controller._on_frame(frame())
             self.assertIn("remains connected", controller.command("stop_capture", {}))
             self.assertFalse(controller.recorder.active)
+            self.assertIsNone(controller.snapshot()["session"]["recordingTarget"])
             self.assertNotIn("stop_capture", getattr(bvh, "commands", []))
+            controller.close()
+
+    def test_axis_recording_target_tracks_provider_start_and_stop(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            controller = StudioController(Path(temporary))
+            self.assertIsNone(controller.snapshot()["session"]["recordingTarget"])
+            provider = CommandProvider()
+            with patch("mocap_studio.state.DemoProvider", return_value=provider):
+                controller.connect({"mode": "demo"})
+
+            controller.command("start_record", {"target": "axis"})
+            recording = controller.snapshot()["session"]
+            self.assertTrue(recording["recording"])
+            self.assertEqual(recording["recordingTarget"], "axis")
+            self.assertEqual(provider.commands[-1], "start_record")
+
+            controller.command("stop_record", {"target": "axis"})
+            stopped = controller.snapshot()["session"]
+            self.assertFalse(stopped["recording"])
+            self.assertIsNone(stopped["recordingTarget"])
+            self.assertEqual(provider.commands[-1], "stop_record")
+
+            controller.command("start_record", {"target": "axis"})
+            controller.disconnect()
+            disconnected = controller.snapshot()["session"]
+            self.assertFalse(disconnected["recording"])
+            self.assertIsNone(disconnected["recordingTarget"])
+            controller.close()
+
+    def test_recording_target_rejects_cross_target_start_and_stop(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            controller = StudioController(Path(temporary))
+            provider = CommandProvider()
+            with patch("mocap_studio.state.DemoProvider", return_value=provider):
+                controller.connect({"mode": "demo"})
+
+            controller.command(
+                "start_record", {"target": "local", "takeName": "local-active"}
+            )
+            with self.assertRaisesRegex(ProviderError, "already active"):
+                controller.command("start_record", {"target": "axis"})
+            with self.assertRaisesRegex(ProviderError, "Cannot stop axis"):
+                controller.command("stop_record", {"target": "axis"})
+            local_state = controller.snapshot()["session"]
+            self.assertTrue(local_state["recording"])
+            self.assertEqual(local_state["recordingTarget"], "local")
+            self.assertTrue(controller.recorder.active)
+            self.assertEqual(provider.commands, [])
+            controller.command("stop_record", {"target": "local"})
+
+            controller.command("start_record", {"target": "axis"})
+            provider_commands = list(provider.commands)
+            with self.assertRaisesRegex(ProviderError, "already active"):
+                controller.command(
+                    "start_record", {"target": "local", "takeName": "rejected"}
+                )
+            with self.assertRaisesRegex(ProviderError, "Cannot stop local"):
+                controller.command("stop_record", {"target": "local"})
+            axis_state = controller.snapshot()["session"]
+            self.assertTrue(axis_state["recording"])
+            self.assertEqual(axis_state["recordingTarget"], "axis")
+            self.assertFalse(controller.recorder.active)
+            self.assertEqual(provider.commands, provider_commands)
+            controller.command("stop_record", {"target": "axis"})
             controller.close()
 
     def test_terminal_provider_error_moves_controller_to_error_and_finalizes(self) -> None:
@@ -437,11 +527,15 @@ class ControllerTests(unittest.TestCase):
             with patch("mocap_studio.state.DemoProvider", return_value=provider):
                 controller.connect({"mode": "demo"})
             controller.command("start_record", {"target": "local", "takeName": "fatal"})
+            self.assertEqual(
+                controller.snapshot()["session"]["recordingTarget"], "local"
+            )
             provider.on_error(ProviderConnectionError("peer closed"))
             state = controller.snapshot()
             self.assertEqual(state["connection"]["status"], "error")
             self.assertEqual(state["connection"]["message"], "peer closed")
             self.assertFalse(state["session"]["recording"])
+            self.assertIsNone(state["session"]["recordingTarget"])
             self.assertFalse(controller.recorder.active)
             self.assertIsNone(controller._provider)
             self.assertEqual(state["takes"][0]["status"], "interrupted")
@@ -465,6 +559,59 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(controller.snapshot()["diagnostics"]["receivedFrames"], 1)
             controller.command("stop_record", {"target": "local"})
             self.assertEqual(controller.snapshot()["takes"][0]["frames"], 1)
+            controller.close()
+
+    def test_udp_idle_status_zeros_rates_without_disconnect_and_rearms(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            controller = StudioController(Path(temporary))
+            provider = FakeProvider()
+            provider.mode = "bvh"
+            provider.capabilities = BvhProvider.capabilities
+            with patch("mocap_studio.state.BvhProvider", return_value=provider):
+                controller.connect({"mode": "bvh", "transport": "udp"})
+
+            provider.on_frame(frame(1, 1, source_bytes=512))
+            live = controller.snapshot()
+            self.assertEqual(live["connection"]["message"], "Receiving motion")
+            self.assertGreater(live["diagnostics"]["packetsPerSecond"], 0)
+            self.assertGreater(live["diagnostics"]["bytesPerSecond"], 0)
+            self.assertGreater(live["avatars"][0]["fps"], 0)
+
+            idle = ProviderStreamIdle(
+                "BVH UDP stream stalled; waiting for frames to resume"
+            )
+            provider.on_error(idle)
+            provider.on_error(idle)  # Duplicate provider status is defensive-no-op.
+            stalled = controller.snapshot()
+            self.assertIs(controller._provider, provider)
+            self.assertEqual(stalled["connection"]["status"], "connected")
+            self.assertIn("stalled", stalled["connection"]["message"])
+            self.assertEqual(stalled["diagnostics"]["packetsPerSecond"], 0.0)
+            self.assertEqual(stalled["diagnostics"]["bytesPerSecond"], 0)
+            self.assertEqual(stalled["diagnostics"]["jitterMs"], 0.0)
+            self.assertEqual(stalled["avatars"][0]["fps"], 0.0)
+            warnings = [
+                event
+                for event in stalled["events"]
+                if event["level"] == "warning" and "stream stalled" in event["message"]
+            ]
+            self.assertEqual(len(warnings), 1)
+
+            provider.on_frame(frame(2, 2, source_bytes=256))
+            resumed = controller.snapshot()
+            self.assertEqual(resumed["connection"]["message"], "Receiving motion")
+            self.assertGreater(resumed["diagnostics"]["packetsPerSecond"], 0)
+            self.assertGreater(resumed["diagnostics"]["bytesPerSecond"], 0)
+            self.assertGreater(resumed["avatars"][0]["fps"], 0)
+
+            provider.on_error(idle)
+            rearmed = controller.snapshot()
+            warnings = [
+                event
+                for event in rearmed["events"]
+                if event["level"] == "warning" and "stream stalled" in event["message"]
+            ]
+            self.assertEqual(len(warnings), 2)
             controller.close()
 
     def test_connection_settings_are_normalized_before_provider_start(self) -> None:
