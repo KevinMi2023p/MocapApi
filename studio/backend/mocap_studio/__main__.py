@@ -8,6 +8,7 @@ import webbrowser
 from pathlib import Path
 
 from . import __version__
+from .recording import TakeLibraryBusyError
 from .server import run_server
 from .state import StudioController
 
@@ -29,8 +30,20 @@ def main(argv: list[str] | None = None) -> int:
     if not 0 <= args.port <= 65535:
         print("error: --port must be between 0 and 65535", file=sys.stderr)
         return 2
-    controller = StudioController(args.data_dir)
-    server = run_server(controller, port=args.port)
+    try:
+        controller = StudioController(args.data_dir)
+    except TakeLibraryBusyError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    try:
+        server = run_server(controller, port=args.port)
+    except (OSError, ValueError) as error:
+        try:
+            controller.close()
+        except Exception:
+            pass
+        print(f"error: could not start local server: {error}", file=sys.stderr)
+        return 1
     port = server.server_address[1]
     url = f"http://127.0.0.1:{port}/"
     stopping = threading.Event()

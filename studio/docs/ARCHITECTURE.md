@@ -68,7 +68,7 @@ Receives Noitom's published standard BVH stream directly on macOS or Linux. It s
 
 - UDP listener and TCP client transports;
 - documented string frames ending in `||`;
-- both published 64-byte legacy binary header layouts;
+- both published 64-byte original/current binary header layouts;
 - packets split or coalesced by TCP;
 - 59-joint legacy and 60-joint current public hierarchies;
 - with-displacement and root-displacement-only layouts;
@@ -76,9 +76,11 @@ Receives Noitom's published standard BVH stream directly on macOS or Linux. It s
 - multiple avatar indices;
 - bounded buffers and finite-number validation.
 
-The current/new binary format is intentionally rejected until a legal, representative
-fixture set is available. The UI asks users to select **String** or **Binary with old
-frame header** in Axis Studio.
+For rotation-only frames, forward kinematics uses the exact public 59-bone offsets
+from Appendix B of Noitom's Neuron Data Reader document (centimeters converted to
+meters). The later 60th `Spine3` joint remains an explicitly documented extension.
+Undocumented **Advanced BVH** variants are intentionally unsupported; users should
+select Axis Studio's standard BVH String or Binary broadcast.
 
 ### MocapApi provider
 
@@ -112,7 +114,8 @@ The first local format is deliberately simple and documented:
 During capture the files end in `.partial` and a `.recording` marker is present. Data is
 flushed and `fsync`ed in bounded chunks. Completion atomically renames the frame stream,
 writes the final manifest, and then removes the marker. Startup recovers interrupted
-takes without overwriting a completed directory.
+takes without overwriting a completed directory. A non-blocking POSIX library lock
+prevents a second macOS/Linux process from mistaking a live take for a crashed one.
 
 This format is not `.mbx` and does not claim compatibility with Axis project folders.
 

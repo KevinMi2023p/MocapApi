@@ -62,11 +62,18 @@ class DemoProvider(Provider):
         if name == "stop_capture":
             self._capturing = False
             return "Demo capture stopped"
-        if name in {"zero_position", "resume_posture", "resume_hands"}:
+        if name in {
+            "zero_position",
+            "resume_posture",
+            "resume_original_posture",
+            "resume_hands",
+        }:
             return f"Demo {name.replace('_', ' ')} completed"
-        if name == "calibrate":
+        if name in {"calibrate", "start_calibration"}:
             self._calibrated = True
             return "Demo calibration completed"
+        if name in {"calibration_next", "calibration_cancel"}:
+            return f"Demo {name.replace('_', ' ')} accepted"
         if name in {"start_record", "stop_record"}:
             return f"Demo {name.replace('_', ' ')} accepted"
         raise ProviderError(f"Unknown demo command: {name}")

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import mimetypes
 import queue
-import re
+import socket
 import threading
 import time
 from http import HTTPStatus
@@ -16,7 +17,6 @@ from .state import StudioController
 
 
 MAX_REQUEST_BODY = 64 * 1024
-SAFE_HOST = re.compile(r"^(localhost|127(?:\.\d{1,3}){3}|\[?::1\]?)(:\d+)?$", re.IGNORECASE)
 STATIC_ROOT = Path(__file__).with_name("static")
 
 
@@ -25,6 +25,8 @@ class StudioHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
     def __init__(self, address: tuple[str, int], controller: StudioController) -> None:
+        if ":" in address[0]:
+            self.address_family = socket.AF_INET6
         super().__init__(address, StudioRequestHandler)
         self.controller = controller
 
@@ -74,7 +76,7 @@ class StudioRequestHandler(BaseHTTPRequestHandler):
                 message = self.server.controller.command(command, body)
                 self._send_json({"ok": True, "message": message})
             else:
-                self.send_error(HTTPStatus.NOT_FOUND)
+                self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
         except (ValueError, TypeError) as error:
             self._send_json({"error": str(error)}, status=HTTPStatus.BAD_REQUEST)
         except Exception as error:
@@ -94,7 +96,7 @@ class StudioRequestHandler(BaseHTTPRequestHandler):
 
     def _trusted_host(self) -> bool:
         host = self.headers.get("Host", "")
-        if SAFE_HOST.fullmatch(host):
+        if _is_loopback_host(host):
             return True
         self._send_json(
             {"error": "Rejected Host header; Mocap Studio accepts loopback requests only"},
@@ -106,15 +108,26 @@ class StudioRequestHandler(BaseHTTPRequestHandler):
         content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
         if content_type != "application/json":
             raise ValueError("Content-Type must be application/json")
+        if self.headers.get("Transfer-Encoding"):
+            self.close_connection = True
+            raise ValueError("Transfer-Encoding is not supported")
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError as error:
             raise ValueError("Invalid Content-Length") from error
         if length <= 0 or length > MAX_REQUEST_BODY:
+            if length > MAX_REQUEST_BODY:
+                self.close_connection = True
             raise ValueError("JSON request body must be between 1 byte and 64 KiB")
         raw = self.rfile.read(length)
         try:
-            result = json.loads(raw)
+            text = raw.decode("utf-8")
+            result = json.loads(
+                text,
+                parse_constant=lambda value: (_ for _ in ()).throw(
+                    ValueError(f"Non-finite JSON number: {value}")
+                ),
+            )
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise ValueError("Malformed JSON request") from error
         if not isinstance(result, dict):
@@ -156,14 +169,19 @@ class StudioRequestHandler(BaseHTTPRequestHandler):
         try:
             candidate.relative_to(STATIC_ROOT.resolve())
         except ValueError:
-            self.send_error(HTTPStatus.FORBIDDEN)
+            self._send_text("Forbidden\n", status=HTTPStatus.FORBIDDEN, include_body=include_body)
             return
         if not candidate.is_file():
+            # Extension-less paths are browser routes. Missing asset requests
+            # must remain 404s instead of receiving index.html as JavaScript.
+            if Path(relative).suffix:
+                self._send_text("Not found\n", status=HTTPStatus.NOT_FOUND, include_body=include_body)
+                return
             candidate = STATIC_ROOT / "index.html"
         try:
             data = candidate.read_bytes()
         except OSError:
-            self.send_error(HTTPStatus.NOT_FOUND)
+            self._send_text("Not found\n", status=HTTPStatus.NOT_FOUND, include_body=include_body)
             return
         content_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
         self.send_response(HTTPStatus.OK)
@@ -188,7 +206,9 @@ class StudioRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _send_text(self, text: str, *, status: HTTPStatus) -> None:
+    def _send_text(
+        self, text: str, *, status: HTTPStatus, include_body: bool = True
+    ) -> None:
         data = text.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -196,7 +216,8 @@ class StudioRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self._security_headers()
         self.end_headers()
-        self.wfile.write(data)
+        if include_body:
+            self.wfile.write(data)
 
     def _security_headers(self) -> None:
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -223,3 +244,32 @@ def run_server(
     if ready:
         ready.set()
     return server
+
+
+def _is_loopback_host(value: str) -> bool:
+    if not value or any(character.isspace() for character in value):
+        return False
+    hostname = value
+    port = ""
+    if value.startswith("["):
+        closing = value.find("]")
+        if closing < 0:
+            return False
+        hostname = value[1:closing]
+        remainder = value[closing + 1 :]
+        if remainder:
+            if not remainder.startswith(":"):
+                return False
+            port = remainder[1:]
+    elif value.count(":") == 1:
+        hostname, port = value.rsplit(":", 1)
+    elif value.count(":") > 1:
+        hostname = value
+    if port and (not port.isdigit() or int(port) > 65535):
+        return False
+    if hostname.rstrip(".").lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False

@@ -21,13 +21,18 @@ from .base import (
     MotionFrame,
     Provider,
     ProviderCapabilities,
+    ProviderConnectionError,
     ProviderError,
 )
 
 
 LEGACY_START_TOKEN = 0xDDFF
 LEGACY_END_TOKEN = 0xEEFF
+# Axis' original ``_BVH_PIPE`` header stores the value count and flags as
+# 32-bit integers. Newer Axis/Neuron streams use the same 64-byte envelope but
+# compact those fields and add a source frame index.
 LEGACY_HEADER = struct.Struct("<H4BIiiI32sIIH")
+MODERN_HEADER = struct.Struct("<H4BHBBI32sIIIIH")
 MAX_FRAME_VALUES = 4096
 MAX_STRING_BUFFER = 2 * 1024 * 1024
 
@@ -41,6 +46,7 @@ class WireFrame:
     version: tuple[int, int, int, int] | None = None
     with_displacement: bool | None = None
     with_reference: bool = False
+    source_frame_index: int | None = None
 
 
 class BvhStringDecoder:
@@ -79,7 +85,7 @@ class BvhStringDecoder:
 
 
 class LegacyBinaryDecoder:
-    """Decode the published 64-byte legacy BVH frame header (v1.0.x)."""
+    """Decode both published 64-byte BVH frame-header generations."""
 
     def __init__(self) -> None:
         self._buffer = bytearray()
@@ -96,27 +102,26 @@ class LegacyBinaryDecoder:
                     break
                 del self._buffer[:boundary]
                 continue
-            unpacked = LEGACY_HEADER.unpack_from(self._buffer)
+            if struct.unpack_from("<H", self._buffer, LEGACY_HEADER.size - 2)[0] != LEGACY_END_TOKEN:
+                del self._buffer[:2]
+                continue
+            try:
+                header = _decode_binary_header(self._buffer)
+            except ProviderError:
+                # Drop the known-size corrupt envelope so a bad datagram cannot
+                # poison this decoder forever. Its unknown body is resynchronised
+                # by the start-token scan on the next feed.
+                del self._buffer[: LEGACY_HEADER.size]
+                raise
             (
-                start,
-                ver0,
-                ver1,
-                ver2,
-                ver3,
+                version,
                 data_count,
                 with_displacement,
                 with_reference,
                 avatar_index,
-                avatar_name,
-                _reserved1,
-                _reserved2,
-                end,
-            ) = unpacked
-            if start != LEGACY_START_TOKEN or end != LEGACY_END_TOKEN:
-                del self._buffer[:2]
-                continue
-            if data_count <= 0 or data_count > MAX_FRAME_VALUES:
-                raise ProviderError(f"Invalid legacy BVH value count: {data_count}")
+                name,
+                source_frame_index,
+            ) = header
             frame_size = LEGACY_HEADER.size + data_count * 4
             if len(self._buffer) < frame_size:
                 break
@@ -124,19 +129,138 @@ class LegacyBinaryDecoder:
             del self._buffer[:frame_size]
             if not finite_values(values):
                 raise ProviderError("Legacy BVH frame contains NaN, infinity, or unsafe values")
-            name = avatar_name.split(b"\x00", 1)[0].decode("utf-8", errors="replace")
             frames.append(
                 WireFrame(
                     avatar_index=avatar_index,
                     avatar_name=name or f"Avatar{avatar_index:02d}",
                     values=tuple(values),
                     source_bytes=frame_size,
-                    version=(ver0, ver1, ver2, ver3),
+                    version=version,
                     with_displacement=bool(with_displacement),
                     with_reference=bool(with_reference),
+                    source_frame_index=source_frame_index,
                 )
             )
         return frames
+
+
+def _decode_binary_header(
+    data: bytes | bytearray,
+) -> tuple[tuple[int, int, int, int], int, int, int, int, str, int | None]:
+    old = LEGACY_HEADER.unpack_from(data)
+    modern = MODERN_HEADER.unpack_from(data)
+    candidates: list[
+        tuple[int, tuple[int, int, int, int], int, int, int, int, str, int | None]
+    ] = []
+
+    def add_candidate(
+        *,
+        version: tuple[int, int, int, int],
+        count: int,
+        displacement: int,
+        reference: int,
+        avatar_index: int,
+        raw_name: bytes,
+        source_frame_index: int | None,
+        modern_layout: bool,
+    ) -> None:
+        if not 0 < count <= MAX_FRAME_VALUES or displacement not in (0, 1) or reference not in (0, 1):
+            return
+        decoded = _plausible_avatar_name(raw_name)
+        if decoded is None:
+            return
+        score = (2 if decoded else 0) + (1 if avatar_index < 1_000_000 else 0)
+        # Prefer the modern interpretation when it carries its distinguishing
+        # frame index; completely zero/empty headers are semantically identical.
+        if modern_layout and source_frame_index:
+            score += 1
+        candidates.append(
+            (
+                score,
+                version,
+                count,
+                displacement,
+                reference,
+                avatar_index,
+                decoded,
+                source_frame_index,
+            )
+        )
+
+    (
+        start,
+        v0,
+        v1,
+        v2,
+        v3,
+        count,
+        displacement,
+        reference,
+        avatar_index,
+        raw_name,
+        _reserved1,
+        _reserved2,
+        end,
+    ) = old
+    if start == LEGACY_START_TOKEN and end == LEGACY_END_TOKEN:
+        add_candidate(
+            version=(v0, v1, v2, v3),
+            count=count,
+            displacement=displacement,
+            reference=reference,
+            avatar_index=avatar_index,
+            raw_name=raw_name,
+            source_frame_index=None,
+            modern_layout=False,
+        )
+
+    (
+        start,
+        v0,
+        v1,
+        v2,
+        v3,
+        count,
+        displacement,
+        reference,
+        avatar_index,
+        raw_name,
+        frame_index,
+        _reserved0,
+        _reserved1,
+        _reserved2,
+        end,
+    ) = modern
+    if start == LEGACY_START_TOKEN and end == LEGACY_END_TOKEN:
+        add_candidate(
+            version=(v0, v1, v2, v3),
+            count=count,
+            displacement=displacement,
+            reference=reference,
+            avatar_index=avatar_index,
+            raw_name=raw_name,
+            source_frame_index=frame_index,
+            modern_layout=True,
+        )
+
+    if not candidates:
+        raise ProviderError("Invalid 64-byte BVH frame header")
+    candidates.sort(key=lambda candidate: candidate[0], reverse=True)
+    _, version, count, displacement, reference, avatar_index, name, frame_index = candidates[0]
+    return version, count, displacement, reference, avatar_index, name, frame_index
+
+
+def _plausible_avatar_name(raw_name: bytes) -> str | None:
+    name_bytes, separator, padding = raw_name.partition(b"\x00")
+    if separator and any(padding):
+        return None
+    try:
+        name = name_bytes.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return None
+    if any(not character.isprintable() for character in name):
+        return None
+    return name
 
 
 def parse_string_frame(payload: bytes) -> WireFrame:
@@ -172,6 +296,10 @@ def normalize_wire_frame(
     rotation_order: str = "YXZ",
     source_unit: Literal["meters", "centimeters"] = "centimeters",
 ) -> MotionFrame:
+    if rotation_order not in {"XYZ", "XZY", "YXZ", "YZX", "ZXY", "ZYX"}:
+        raise ProviderError("Unsupported BVH rotation order")
+    if source_unit not in {"meters", "centimeters"}:
+        raise ProviderError("Source unit must be meters or centimeters")
     values = frame.values
     if frame.with_reference:
         # Published legacy headers describe an optional 6-float reference bone
@@ -191,15 +319,21 @@ def normalize_wire_frame(
             offset = index * 6
             px, py, pz, rx, ry, rz = values[offset : offset + 6]
             local_positions[definition.name] = (px * scale, py * scale, pz * scale)
-            local_rotations[definition.name] = euler_to_quaternion((rx, ry, rz), rotation_order)
+            local_rotations[definition.name] = _wire_rotation((rx, ry, rz), rotation_order)
     else:
-        root_position = tuple(value * scale for value in values[:3])
+        # Translation channels are motion relative to the Appendix B template
+        # root. At zero translation, Hips remains at its documented 84.102 cm
+        # height so the feet land on the ground plane.
+        root_position = tuple(
+            offset + value * scale
+            for offset, value in zip(definitions[0].offset, values[:3], strict=True)
+        )
         local_positions[definitions[0].name] = root_position  # type: ignore[assignment]
-        local_rotations[definitions[0].name] = euler_to_quaternion(values[3:6], rotation_order)
+        local_rotations[definitions[0].name] = _wire_rotation(values[3:6], rotation_order)
         for index, definition in enumerate(definitions[1:], start=1):
             offset = 6 + (index - 1) * 3
             local_positions[definition.name] = definition.offset
-            local_rotations[definition.name] = euler_to_quaternion(
+            local_rotations[definition.name] = _wire_rotation(
                 values[offset : offset + 3], rotation_order
             )
 
@@ -240,7 +374,16 @@ def normalize_wire_frame(
         joints=tuple(poses),
         fps=0.0,
         source_bytes=frame.source_bytes,
+        source_frame_index=frame.source_frame_index,
     )
+
+
+def _wire_rotation(
+    channels: Sequence[float], rotation_order: str
+) -> tuple[float, float, float, float]:
+    """Map order-positioned wire channels into the converter's XYZ tuple."""
+    axis_values = dict(zip(rotation_order, channels, strict=True))
+    return euler_to_quaternion(tuple(axis_values[axis] for axis in "XYZ"), rotation_order)
 
 
 def _infer_layout(
@@ -261,6 +404,37 @@ def _infer_layout(
     raise ProviderError(
         f"Unsupported BVH value layout ({count} floats); expected 59/60-joint data"
     )
+
+
+class BvhStreamDecoder:
+    """Persist the selected wire format across fragmented TCP reads."""
+
+    def __init__(self) -> None:
+        self._format: Literal["binary", "string"] | None = None
+        self._pending = bytearray()
+        self._strings = BvhStringDecoder()
+        self._binary = LegacyBinaryDecoder()
+
+    def feed(self, data: bytes, *, datagram: bool = False) -> list[WireFrame]:
+        if datagram:
+            # A UDP datagram is an atomic transport unit. Never retain an
+            # incomplete packet: otherwise the next sender packet could be
+            # consumed as the missing body of a truncated header.
+            if data.startswith(struct.pack("<H", LEGACY_START_TOKEN)):
+                return LegacyBinaryDecoder().feed(data)
+            return BvhStringDecoder().feed(data, datagram=True)
+
+        if self._format is None:
+            self._pending.extend(data)
+            if len(self._pending) < 2:
+                return []
+            start_bytes = struct.pack("<H", LEGACY_START_TOKEN)
+            self._format = "binary" if self._pending.startswith(start_bytes) else "string"
+            data = bytes(self._pending)
+            self._pending.clear()
+        if self._format == "binary":
+            return self._binary.feed(data)
+        return self._strings.feed(data)
 
 
 class BvhProvider(Provider):
@@ -339,8 +513,7 @@ class BvhProvider(Provider):
         self._thread = None
 
     def _run(self, on_frame: FrameCallback, on_error: ErrorCallback) -> None:
-        string_decoder = BvhStringDecoder()
-        binary_decoder = LegacyBinaryDecoder()
+        decoder = BvhStreamDecoder()
         frame_numbers: dict[int, int] = {}
         last_error_at = 0.0
         while not self._stop.is_set():
@@ -350,14 +523,12 @@ class BvhProvider(Provider):
                 data = self._socket.recv(65535)
                 if not data:
                     if self.transport == "tcp":
-                        raise ProviderError("BVH TCP peer closed the connection")
+                        on_error(ProviderConnectionError("BVH TCP peer closed the connection"))
+                        break
                     continue
-                is_binary = data.startswith(struct.pack("<H", LEGACY_START_TOKEN))
-                wire_frames: Iterable[WireFrame]
-                if is_binary:
-                    wire_frames = binary_decoder.feed(data)
-                else:
-                    wire_frames = string_decoder.feed(data, datagram=self.transport == "udp")
+                wire_frames: Iterable[WireFrame] = decoder.feed(
+                    data, datagram=self.transport == "udp"
+                )
                 for wire_frame in wire_frames:
                     next_number = frame_numbers.get(wire_frame.avatar_index, 0) + 1
                     frame_numbers[wire_frame.avatar_index] = next_number
@@ -374,12 +545,16 @@ class BvhProvider(Provider):
             except OSError as error:
                 if self._stop.is_set():
                     break
-                on_error(ProviderError(f"BVH socket error: {error}"))
+                on_error(ProviderConnectionError(f"BVH socket error: {error}"))
                 break
             except Exception as error:
+                if self.transport == "tcp":
+                    on_error(ProviderConnectionError(f"BVH TCP stream error: {error}"))
+                    break
                 # A malformed UDP datagram must not tear down the receiver. Limit
                 # error delivery to avoid overwhelming the event log.
                 now = time.monotonic()
                 if now - last_error_at >= 2.0:
                     on_error(error)
                     last_error_at = now
+        self._stop.set()

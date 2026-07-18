@@ -18,7 +18,7 @@ source, failure mode, UI state, tests, and platform support are all explicit.
 
 ## Pass 2 — live interoperability matrix
 
-- [ ] Validate string and both legacy binary layouts against captured Axis Studio 2/3 data
+- [ ] Validate string and both published 64-byte binary header generations against captured Axis Studio 2/3 data
 - [ ] Validate 1–4 avatars, all six rotations, displacement modes, UDP loss and TCP reconnect
 - [ ] Add saved connection profiles and automatic reconnect with bounded backoff
 - [ ] Add BVH file playback and deterministic regression fixtures

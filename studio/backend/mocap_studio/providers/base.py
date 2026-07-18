@@ -62,6 +62,7 @@ class MotionFrame:
     joints: tuple[JointPose, ...]
     fps: float = 60.0
     source_bytes: int = 0
+    source_frame_index: int | None = None
     sensors: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
 
@@ -71,6 +72,10 @@ ErrorCallback = Callable[[Exception], None]
 
 class ProviderError(RuntimeError):
     """A provider could not start, parse data, or execute a command."""
+
+
+class ProviderConnectionError(ProviderError):
+    """The provider's transport ended and cannot continue receiving frames."""
 
 
 class Provider(ABC):
