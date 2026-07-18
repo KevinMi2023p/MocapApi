@@ -71,7 +71,7 @@ const defaultConnection: ConnectionSettings = {
   rotationOrder: "YXZ",
   upAxis: "+Y",
   handedness: "right",
-  unit: "meters",
+  unit: "centimeters",
 };
 
 const formatDuration = (milliseconds: number, showFrames = false) => {

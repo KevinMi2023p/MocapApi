@@ -134,6 +134,26 @@ describe("Mocap Studio operator console", () => {
     expect(takeName).toHaveValue("take002");
   });
 
+  it("connects a standard BVH source with centimeter output by default", async () => {
+    apiMocks.fetchState.mockResolvedValue(studioState("disconnected"));
+    render(<App />);
+
+    const connectButton = await screen.findByRole("button", { name: "Connect" });
+    await waitFor(() => expect(connectButton).toBeEnabled());
+    fireEvent.click(connectButton);
+    const dialog = screen.getByRole("dialog", { name: "Connection & streaming" });
+    fireEvent.change(within(dialog).getByRole("combobox", { name: "Connection mode" }), {
+      target: { value: "bvh" },
+    });
+    expect(within(dialog).getByRole("combobox", { name: "Units" })).toHaveValue("centimeters");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Connect" }));
+
+    await waitFor(() => expect(apiMocks.connect).toHaveBeenCalledWith(expect.objectContaining({
+      mode: "bvh",
+      unit: "centimeters",
+    })));
+  });
+
   it("does not advance calibration after rejection and Escape sends cancellation", async () => {
     apiMocks.fetchState.mockResolvedValue(studioState("connected"));
     apiMocks.sendCommand.mockRejectedValueOnce(new Error("Provider rejected calibration"));
