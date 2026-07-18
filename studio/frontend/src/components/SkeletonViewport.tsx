@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { Canvas, useFrame } from "@react-three/fiber";
+import { Canvas } from "@react-three/fiber";
 import {
   GizmoHelper,
   GizmoViewport,
@@ -18,7 +18,7 @@ import {
   Rotate3d,
   ScanLine,
 } from "lucide-react";
-import type { Group, PerspectiveCamera as PerspectiveCameraType } from "three";
+import type { PerspectiveCamera as PerspectiveCameraType } from "three";
 import type { Avatar, Joint, Sensor } from "../types";
 
 export type CameraView = "perspective" | "front" | "right";
@@ -29,6 +29,7 @@ interface SkeletonViewportProps {
   selectedJointId: string | null;
   selectedSensorId: number | null;
   capturing: boolean;
+  preview: boolean;
   cameraView: CameraView;
   cameraRevision: number;
   followActor: boolean;
@@ -88,7 +89,6 @@ function SkeletonModel({
   sensors,
   selectedJointId,
   selectedSensorId,
-  capturing,
   showSensors,
   onJointSelect,
 }: Pick<
@@ -97,11 +97,9 @@ function SkeletonModel({
   | "sensors"
   | "selectedJointId"
   | "selectedSensorId"
-  | "capturing"
   | "showSensors"
   | "onJointSelect"
 >) {
-  const group = useRef<Group>(null);
   const jointsByName = useMemo(
     () => new Map(avatar?.joints.map((joint) => [joint.name, joint]) ?? []),
     [avatar],
@@ -111,17 +109,10 @@ function SkeletonModel({
     [sensors],
   );
 
-  useFrame(({ clock }) => {
-    if (!group.current) return;
-    const phase = clock.elapsedTime;
-    group.current.position.y = capturing ? Math.sin(phase * 2.2) * 0.008 : 0;
-    group.current.rotation.y = capturing ? Math.sin(phase * 0.55) * 0.025 : 0;
-  });
-
   if (!avatar) return null;
 
   return (
-    <group ref={group}>
+    <group>
       {avatar.joints.map((joint) => {
         if (!joint.parent) return null;
         const parent = jointsByName.get(joint.parent);
@@ -278,8 +269,8 @@ export function SkeletonViewport(props: SkeletonViewportProps) {
         </div>
         <div className="viewport-readout" aria-live="polite">
           <span>{props.avatar?.name ?? "No avatar"}</span>
-          <span className={props.capturing ? "live" : ""}>
-            {props.capturing ? "LIVE" : "IDLE"}
+          <span className={props.capturing ? "live" : props.preview ? "preview" : ""}>
+            {props.preview ? "PREVIEW / OFFLINE" : props.capturing ? "LIVE" : "IDLE"}
           </span>
           <span>{props.avatar?.fps ?? 0} FPS</span>
         </div>
@@ -311,7 +302,6 @@ export function SkeletonViewport(props: SkeletonViewportProps) {
             sensors={props.sensors}
             selectedJointId={props.selectedJointId}
             selectedSensorId={props.selectedSensorId}
-            capturing={props.capturing}
             showSensors={props.showSensors}
             onJointSelect={props.onJointSelect}
           />
@@ -335,7 +325,7 @@ export function SkeletonViewport(props: SkeletonViewportProps) {
 
         {props.showLabels && props.avatar ? (
           <div className="avatar-label" aria-hidden="true">
-            <span className="avatar-label-dot" />
+            <span className={`avatar-label-dot${props.preview ? " preview" : ""}`} />
             {props.avatar.name}
           </div>
         ) : null}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertCircle,
@@ -21,7 +21,6 @@ import {
   Layers3,
   ListTree,
   Magnet,
-  Pause,
   Play,
   Plug,
   Radio,
@@ -209,8 +208,9 @@ export default function App() {
   const [bottomCollapsed, setBottomCollapsed] = useState(false);
   const [sceneExpanded, setSceneExpanded] = useState(true);
   const [jointFilter, setJointFilter] = useState("");
-  const [timelinePlaying, setTimelinePlaying] = useState(false);
-  const [timelineFrame, setTimelineFrame] = useState(0);
+  const [takeNameDraft, setTakeNameDraft] = useState(initialState.session.takeName);
+  const takeNameDirty = useRef(false);
+  const previousRecording = useRef(initialState.session.recording);
 
   useEffect(() => {
     let unsubscribe = () => {};
@@ -241,49 +241,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (backendOnline || state.connection.status !== "connected") return;
-    const timer = window.setInterval(() => {
-      setState((current) => {
-        const elapsed = current.session.capturing ? current.session.elapsedMs + 100 : 0;
-        return {
-          ...current,
-          session: { ...current.session, elapsedMs: elapsed },
-          avatars: current.avatars.map((avatar) => ({
-            ...avatar,
-            frame: avatar.frame + (current.session.capturing ? 6 : 0),
-          })),
-          diagnostics: {
-            ...current.diagnostics,
-            receivedFrames: current.diagnostics.receivedFrames + (current.session.capturing ? 6 : 0),
-            packetsPerSecond: current.session.capturing ? 60 : 0,
-            bytesPerSecond: current.session.capturing ? 42_680 : 0,
-            jitterMs: current.session.capturing ? 0.8 : 0,
-            latencyMs: current.session.capturing ? 4.2 : 0,
-            lastFrameAt: current.session.capturing ? new Date().toISOString() : current.diagnostics.lastFrameAt,
-          },
-        };
-      });
-    }, 100);
-    return () => window.clearInterval(timer);
-  }, [backendOnline, state.connection.status]);
-
-  useEffect(() => {
-    if (!timelinePlaying) return;
-    const timer = window.setInterval(() => {
-      setTimelineFrame((frame) => (frame >= (state.takes.find((take) => take.id === selectedTakeId)?.frames ?? 600) ? 0 : frame + 1));
-    }, 1000 / 30);
-    return () => window.clearInterval(timer);
-  }, [selectedTakeId, state.takes, timelinePlaying]);
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      setConnectionDialogOpen(false);
-      setCalibrationDialogOpen(false);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+    const recordingChanged = previousRecording.current !== state.session.recording;
+    if (recordingChanged || !takeNameDirty.current) {
+      setTakeNameDraft(state.session.takeName);
+      takeNameDirty.current = false;
+    }
+    previousRecording.current = state.session.recording;
+  }, [state.session.recording, state.session.takeName]);
 
   const primaryAvatar = useMemo(
     () => state.avatars.find((avatar) => avatar.id === selectedAvatarId) ?? state.avatars[0],
@@ -304,115 +268,57 @@ export default function App() {
   const warningCount = state.sensors.filter(
     (sensor) => !sensor.connected || sensor.signal < 75 || sensor.magnetic === "unstable",
   ).length;
-  const connected = state.connection.status === "connected";
+  const connected = backendOnline && state.connection.status === "connected";
+  const providerAttached = backendOnline && (state.connection.status === "connected" || state.connection.status === "error");
+  const previewMode = !backendOnline;
+  const sensorTelemetryAvailable = connected && state.capabilities.receiveSensors;
+  const attemptedFrames = state.diagnostics.receivedFrames + state.diagnostics.droppedFrames;
   const captureWorkspace = workspace === "capture";
 
   const execute = useCallback(async (command: string, options: Record<string, unknown> = {}) => {
     setLastError(null);
-    if (backendOnline) {
-      try {
-        await sendCommand(command, options);
-        return;
-      } catch (error) {
-        setLastError(error instanceof Error ? error.message : "Command failed");
-        return;
-      }
+    if (!backendOnline) {
+      const error = new Error("Local bridge is offline. Preview data is visual-only.");
+      setLastError(error.message);
+      throw error;
     }
-
-    setState((current) => {
-      const now = new Date().toISOString();
-      const event = {
-        id: `${Date.now()}-${command}`,
-        timestamp: now,
-        level: "success" as const,
-        source: "Demo",
-        message: `${command.replace(/_/g, " ")} accepted`,
-      };
-      if (command === "start_capture") {
-        return { ...current, session: { ...current.session, capturing: true }, events: [event, ...current.events] };
-      }
-      if (command === "stop_capture") {
-        return {
-          ...current,
-          session: { ...current.session, capturing: false, recording: false },
-          events: [event, ...current.events],
-        };
-      }
-      if (command === "start_record") {
-        return {
-          ...current,
-          session: { ...current.session, capturing: true, recording: true, elapsedMs: 0 },
-          events: [event, ...current.events],
-        };
-      }
-      if (command === "stop_record") {
-        const take = {
-          id: `${Date.now()}`,
-          name: current.session.takeName,
-          notes: "Recorded in demo mode",
-          startedAt: now,
-          durationMs: current.session.elapsedMs,
-          frames: Math.round((current.session.elapsedMs / 1000) * 60),
-          status: "complete" as const,
-        };
-        return {
-          ...current,
-          session: { ...current.session, recording: false },
-          takes: [take, ...current.takes],
-          events: [event, ...current.events],
-        };
-      }
-      return { ...current, events: [event, ...current.events] };
-    });
+    try {
+      await sendCommand(command, options);
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error("Command failed");
+      setLastError(error.message);
+      throw error;
+    }
   }, [backendOnline]);
 
   const connectNow = useCallback(async (settings: ConnectionSettings = connectionSettings) => {
     setConnectionSettings(settings);
     setLastError(null);
-    if (backendOnline) {
-      try {
-        await connect(settings);
-      } catch (error) {
-        setLastError(error instanceof Error ? error.message : "Connection failed");
-        throw error;
-      }
-      return;
+    if (!backendOnline) {
+      const error = new Error("Local bridge is offline. Start the bridge before connecting.");
+      setLastError(error.message);
+      throw error;
     }
-    setState((current) => ({
-      ...current,
-      connection: {
-        status: "connected",
-        mode: settings.mode,
-        transport: settings.transport,
-        host: settings.host,
-        port: settings.port,
-        message: settings.mode === "demo" ? "Demo stream connected" : "Local simulation connected",
-      },
-      events: [{
-        id: `${Date.now()}-connect`,
-        timestamp: new Date().toISOString(),
-        level: "success",
-        source: "Connection",
-        message: `${settings.mode === "demo" ? "Demo" : settings.mode.toUpperCase()} provider connected`,
-      }, ...current.events],
-    }));
+    try {
+      await connect(settings);
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error("Connection failed");
+      setLastError(error.message);
+      throw error;
+    }
   }, [backendOnline, connectionSettings]);
 
   const disconnectNow = useCallback(async () => {
     setLastError(null);
-    if (backendOnline) {
-      try {
-        await disconnect();
-      } catch (error) {
-        setLastError(error instanceof Error ? error.message : "Disconnect failed");
-      }
+    if (!backendOnline) {
+      setLastError("Local bridge is offline. No live connection can be changed.");
       return;
     }
-    setState((current) => ({
-      ...current,
-      connection: { ...current.connection, status: "disconnected", message: "Ready" },
-      session: { ...current.session, capturing: false, recording: false },
-    }));
+    try {
+      await disconnect();
+    } catch (cause) {
+      setLastError(cause instanceof Error ? cause.message : "Disconnect failed");
+    }
   }, [backendOnline]);
 
   const selectJoint = useCallback((joint: Joint) => {
@@ -428,16 +334,16 @@ export default function App() {
     setInspectorTab("sensor");
   }, [primaryAvatar]);
 
+  const bridgeReason = backendOnline ? undefined : "Local bridge offline — preview data is visual-only";
   const connectionReason = connected ? undefined : "Connect a motion provider first";
   const workspaceReason = captureWorkspace ? undefined : "Switch to Capture workspace to use live controls";
-  const captureDisabled = workspaceReason ?? connectionReason ?? (!state.capabilities.receiveMotion ? state.capabilities.reason ?? "Motion receive is unavailable" : undefined);
-  const commandDisabled = workspaceReason ?? connectionReason ?? (!state.capabilities.serverCommands ? state.capabilities.reason ?? "Provider commands are unavailable" : undefined);
-  const calibrationDisabled = workspaceReason ?? connectionReason ?? (!state.capabilities.calibrationCommands ? state.capabilities.reason ?? "Calibration commands are unavailable" : undefined);
-  const recordingDisabled = workspaceReason ?? connectionReason ?? (!(state.capabilities.axisRecording || state.capabilities.localRecording) ? state.capabilities.reason ?? "Recording is unavailable" : undefined);
+  const captureDisabled = workspaceReason ?? bridgeReason ?? connectionReason ?? (!state.capabilities.serverCommands ? state.capabilities.reason ?? "Provider capture commands are unavailable" : undefined);
+  const commandDisabled = workspaceReason ?? bridgeReason ?? connectionReason ?? (!state.capabilities.serverCommands ? state.capabilities.reason ?? "Provider commands are unavailable" : undefined);
+  const calibrationDisabled = workspaceReason ?? bridgeReason ?? connectionReason ?? (!state.capabilities.calibrationCommands ? state.capabilities.reason ?? "Calibration commands are unavailable" : undefined);
+  const recordingDisabled = workspaceReason ?? bridgeReason ?? connectionReason ?? (!(state.capabilities.axisRecording || state.capabilities.localRecording) ? state.capabilities.reason ?? "Recording is unavailable" : undefined);
 
   const chooseTake = (take: Take) => {
     setSelectedTakeId(take.id);
-    setTimelineFrame(0);
   };
 
   return (
@@ -482,9 +388,9 @@ export default function App() {
         </nav>
 
         <div className="title-actions">
-          <div className={`compact-connection ${state.connection.status}`}>
+          <div className={`compact-connection ${backendOnline ? state.connection.status : "disconnected"}`}>
             <span className="status-dot" />
-            <span>{connected ? `${state.connection.host}:${state.connection.port}` : "Not connected"}</span>
+            <span>{previewMode ? "PREVIEW / BRIDGE OFFLINE" : providerAttached ? `${state.connection.host}:${state.connection.port}` : "Not connected"}</span>
           </div>
           <button type="button" className="title-icon-button" aria-label="Connection settings" title="Connection settings" onClick={() => setConnectionDialogOpen(true)}>
             <Settings size={15} />
@@ -498,16 +404,17 @@ export default function App() {
       <section className="command-bar" aria-label="Capture controls">
         <div className="command-group connection-command">
           <ToolbarAction
-            label={connected ? "Disconnect" : "Connect"}
-            tooltip={connected ? "Disconnect from the current provider" : "Configure and connect to a motion provider"}
+            label={providerAttached ? "Disconnect" : "Connect"}
+            tooltip={providerAttached ? "Detach the current provider, including an errored transport" : "Configure and connect to a motion provider"}
             active={connected}
-            onClick={() => connected ? void disconnectNow() : setConnectionDialogOpen(true)}
+            disabledReason={previewMode ? "Local bridge offline — open Settings to inspect configuration" : undefined}
+            onClick={() => providerAttached ? void disconnectNow() : setConnectionDialogOpen(true)}
           >
-            {connected ? <Wifi size={18} /> : <Plug size={18} />}
+            {providerAttached ? <Wifi size={18} /> : <Plug size={18} />}
           </ToolbarAction>
           <div className="connection-copy">
-            <strong>{connected ? "Provider online" : "Provider offline"}</strong>
-            <span>{state.connection.message}</span>
+            <strong>{previewMode ? "Preview only" : state.connection.status === "error" ? "Provider error" : connected ? "Provider online" : "Provider offline"}</strong>
+            <span>{previewMode ? "Bridge offline · sample data" : state.connection.message}</span>
           </div>
         </div>
         <span className="command-divider" />
@@ -517,7 +424,7 @@ export default function App() {
             tooltip={state.session.capturing ? "Stop receiving the live capture" : "Start receiving live solved motion"}
             active={state.session.capturing}
             disabledReason={captureDisabled}
-            onClick={() => void execute(state.session.capturing ? "stop_capture" : "start_capture")}
+            onClick={() => void execute(state.session.capturing ? "stop_capture" : "start_capture").catch(() => {})}
           >
             {state.session.capturing ? <Square size={17} /> : <Activity size={18} />}
           </ToolbarAction>
@@ -525,7 +432,7 @@ export default function App() {
             label="Zero"
             tooltip="Set the current heading as zero position"
             disabledReason={commandDisabled}
-            onClick={() => void execute("zero_position")}
+            onClick={() => void execute("zero_position").catch(() => {})}
           >
             <RotateCcw size={18} />
           </ToolbarAction>
@@ -541,7 +448,7 @@ export default function App() {
             label="Resume"
             tooltip="Resume the provider's last original posture"
             disabledReason={commandDisabled}
-            onClick={() => void execute("resume_original_posture")}
+            onClick={() => void execute("resume_original_posture").catch(() => {})}
           >
             <RefreshCw size={18} />
           </ToolbarAction>
@@ -551,12 +458,12 @@ export default function App() {
           <label htmlFor="take-name">TAKE NAME</label>
           <input
             id="take-name"
-            value={state.session.takeName}
+            value={takeNameDraft}
             disabled={state.session.recording}
-            onChange={(event) => setState((current) => ({
-              ...current,
-              session: { ...current.session, takeName: event.target.value },
-            }))}
+            onChange={(event) => {
+              takeNameDirty.current = true;
+              setTakeNameDraft(event.target.value);
+            }}
           />
         </div>
         <div className={`capture-clock${state.session.recording ? " recording" : ""}`}>
@@ -570,7 +477,10 @@ export default function App() {
           danger
           active={state.session.recording}
           disabledReason={recordingDisabled}
-          onClick={() => void execute(state.session.recording ? "stop_record" : "start_record", { name: state.session.takeName })}
+          onClick={() => void execute(
+            state.session.recording ? "stop_record" : "start_record",
+            state.session.recording ? {} : { takeName: takeNameDraft },
+          ).catch(() => {})}
         >
           {state.session.recording ? <Square size={17} /> : <CircleDot size={19} />}
         </ToolbarAction>
@@ -618,13 +528,19 @@ export default function App() {
                 <div className="suit-health-card">
                   <div className="health-card-heading">
                     <span><Gauge size={14} /> Suit health</span>
-                    <strong className={warningCount ? "warning-text" : "good-text"}>{warningCount ? "CHECK" : "READY"}</strong>
+                    <strong className={!sensorTelemetryAvailable ? "unavailable-text" : warningCount ? "warning-text" : "good-text"}>
+                      {!connected ? "OFFLINE" : !state.capabilities.receiveSensors ? "UNAVAILABLE" : warningCount ? "CHECK" : "READY"}
+                    </strong>
                   </div>
-                  <MetricBar label="Sensor link" value={state.sensors.length - warningCount} suffix={` / ${state.sensors.length}`} maximum={state.sensors.length || 1} tone={warningCount ? "yellow" : "green"} />
+                  {sensorTelemetryAvailable ? (
+                    <MetricBar label="Sensor link" value={state.sensors.length - warningCount} suffix={` / ${state.sensors.length}`} maximum={state.sensors.length || 1} tone={warningCount ? "yellow" : "green"} />
+                  ) : (
+                    <div className="compact-unavailable"><Radio size={12} /> Sensor telemetry {!connected ? "offline" : "unavailable"}</div>
+                  )}
                   <div className="mini-stat-grid">
                     <span><small>Frame</small><strong>{primaryAvatar?.frame ?? 0}</strong></span>
                     <span><small>Rate</small><strong>{primaryAvatar?.fps ?? 0} fps</strong></span>
-                    <span><small>Warnings</small><strong>{warningCount}</strong></span>
+                    <span><small>Warnings</small><strong>{sensorTelemetryAvailable ? warningCount : "—"}</strong></span>
                   </div>
                 </div>
                 <div className="working-mode-row">
@@ -675,7 +591,7 @@ export default function App() {
             ) : null}
 
             {leftTab === "sensors" ? (
-              <SensorMap sensors={state.sensors} selectedSensorId={selectedSensor?.id ?? null} onSelect={selectSensor} />
+              <SensorMap sensors={state.sensors} selectedSensorId={selectedSensor?.id ?? null} available={sensorTelemetryAvailable} connected={connected} onSelect={selectSensor} />
             ) : null}
           </div>
         </aside>
@@ -686,11 +602,12 @@ export default function App() {
           selectedJointId={selectedJoint?.id ?? null}
           selectedSensorId={selectedSensor?.id ?? null}
           capturing={state.session.capturing}
+          preview={previewMode}
           cameraView={cameraView}
           cameraRevision={cameraRevision}
           followActor={followActor}
           showLabels={showLabels}
-          showSensors={showSensors}
+          showSensors={showSensors && sensorTelemetryAvailable}
           onCameraViewChange={(view) => {
             setCameraView(view);
             setCameraRevision((revision) => revision + 1);
@@ -714,7 +631,7 @@ export default function App() {
                 <div className="inspector-entity-header">
                   <span className="entity-icon"><Bone size={20} /></span>
                   <div><span>JOINT</span><h3>{selectedJoint.name}</h3><p>{primaryAvatar?.name} / {selectedJoint.parent ?? "Root"}</p></div>
-                  <span className="entity-live-badge"><i /> LIVE</span>
+                  <span className={`entity-live-badge${connected ? "" : " offline"}`}><i /> {connected ? "LIVE" : "OFFLINE"}</span>
                 </div>
                 <section className="property-section">
                   <h4>Transform <span>World</span></h4>
@@ -756,14 +673,19 @@ export default function App() {
                 <div className="inspector-entity-header">
                   <span className="entity-icon sensor"><Cpu size={20} /></span>
                   <div><span>SENSOR {String(selectedSensor.id).padStart(2, "0")}</span><h3>{selectedSensor.name}</h3><p>{selectedSensor.bodyPart}</p></div>
-                  <span className={`entity-live-badge${selectedSensor.connected ? "" : " offline"}`}><i /> {selectedSensor.connected ? "LIVE" : "OFF"}</span>
+                  <span className={`entity-live-badge${sensorTelemetryAvailable && selectedSensor.connected ? "" : " offline"}`}><i />
+                    {sensorTelemetryAvailable && selectedSensor.connected ? "LIVE" : !connected ? "OFFLINE" : "UNAVAILABLE"}
+                  </span>
                 </div>
-                <section className="property-section telemetry-section">
+                {!sensorTelemetryAvailable ? (
+                  <div className="sensor-unavailable-card"><Radio size={15} /><div><strong>Telemetry {!connected ? "offline" : "unavailable"}</strong><p>{!connected ? "Connect a provider to receive current sensor values." : "This provider does not expose sensor telemetry. Values below are the last sample only."}</p></div></div>
+                ) : null}
+                <section className={`property-section telemetry-section${sensorTelemetryAvailable ? "" : " stale-telemetry"}`}>
                   <h4>Wireless telemetry <span>{selectedSensor.packetRate} pps</span></h4>
                   <MetricBar label="Signal" value={selectedSensor.signal} suffix="%" tone={selectedSensor.signal < 75 ? "yellow" : "green"} />
                   <MetricBar label="Battery" value={selectedSensor.battery} suffix="%" tone={selectedSensor.battery < 25 ? "red" : "blue"} />
                 </section>
-                <section className="property-section sensor-facts">
+                <section className={`property-section sensor-facts${sensorTelemetryAvailable ? "" : " stale-telemetry"}`}>
                   <h4>Device detail</h4>
                   <dl>
                     <div><dt><Battery size={13} /> Battery</dt><dd>{selectedSensor.battery}%</dd></div>
@@ -772,7 +694,7 @@ export default function App() {
                     <div><dt><Magnet size={13} /> Magnetic</dt><dd className={selectedSensor.magnetic === "unstable" ? "warning-text" : "good-text"}><i className={`mag-square ${selectedSensor.magnetic}`} /> {selectedSensor.magnetic}</dd></div>
                   </dl>
                 </section>
-                {selectedSensor.magnetic === "unstable" || selectedSensor.signal < 75 ? (
+                {!sensorTelemetryAvailable ? null : selectedSensor.magnetic === "unstable" || selectedSensor.signal < 75 ? (
                   <div className="sensor-warning-card"><AlertTriangle size={15} /><div><strong>Sensor needs attention</strong><p>Check fit, radio distance, and nearby magnetic interference before calibration.</p></div></div>
                 ) : (
                   <div className="sensor-ready-card"><CheckCircle2 size={15} /><div><strong>Sensor nominal</strong><p>Signal and magnetic readings are stable.</p></div></div>
@@ -819,7 +741,7 @@ export default function App() {
                 </div>
                 <aside className="take-information">
                   <div className="take-info-heading"><strong>Take information</strong><span>READ-ONLY</span></div>
-                  <label><span>Name</span><input value={selectedTake?.name ?? state.session.takeName} readOnly /></label>
+                  <label><span>Name</span><input value={selectedTake?.name ?? takeNameDraft} readOnly /></label>
                   <label><span>Notes</span><input value={selectedTake?.notes ?? "Ready to record"} readOnly /></label>
                   <div className="take-info-footer"><span><Clock3 size={12} /> {selectedTake ? formatDuration(selectedTake.durationMs, true) : formatDuration(state.session.elapsedMs, true)}</span><small>Double-click a take to edit</small></div>
                 </aside>
@@ -829,11 +751,12 @@ export default function App() {
             {bottomTab === "timeline" ? (
               <div className="timeline-layout">
                 <div className="transport-controls">
-                  <button type="button" aria-label="Go to first frame" onClick={() => setTimelineFrame(0)}><SkipBack size={15} /></button>
-                  <button type="button" className="transport-play" aria-label={timelinePlaying ? "Pause playback" : "Play take"} onClick={() => setTimelinePlaying(!timelinePlaying)}>{timelinePlaying ? <Pause size={16} /> : <Play size={16} />}</button>
-                  <button type="button" aria-label="Go to last frame" onClick={() => setTimelineFrame(selectedTake?.frames ?? 0)}><SkipForward size={15} /></button>
-                  <span className="timeline-timecode">{formatDuration((timelineFrame / 60) * 1000, true)}</span>
+                  <button type="button" aria-label="Go to first frame (playback planned)" title="Take playback is planned" disabled><SkipBack size={15} /></button>
+                  <button type="button" className="transport-play" aria-label="Play take (playback planned)" title="Take playback is planned" disabled><Play size={16} /></button>
+                  <button type="button" aria-label="Go to last frame (playback planned)" title="Take playback is planned" disabled><SkipForward size={15} /></button>
+                  <span className="timeline-timecode">00:00:00:00</span>
                   <span className="timeline-rate">60 fps</span>
+                  <span className="planned-badge">PLAYBACK PLANNED</span>
                 </div>
                 <div className="timeline-editor">
                   <div className="track-labels"><div><UserRound size={12} /><span>{primaryAvatar?.name ?? "Avatar"}</span></div><div><Bone size={12} /><span>Motion</span></div><div><Radio size={12} /><span>Sensor quality</span></div></div>
@@ -843,7 +766,7 @@ export default function App() {
                     </div>
                     <div className="timeline-track motion"><span className="motion-clip" style={{ width: `${Math.max(8, Math.min(100, ((selectedTake?.durationMs ?? 18000) / 30000) * 100))}%` }}>{selectedTake?.name ?? "Live buffer"}</span></div>
                     <div className="timeline-track quality"><span /><span /><span className="warning-segment" /><span /><span /></div>
-                    <i className="playhead" style={{ left: `${selectedTake?.frames ? Math.min(100, (timelineFrame / selectedTake.frames) * 100) : 0}%` }} />
+                    <i className="playhead" style={{ left: "0%" }} />
                   </div>
                 </div>
               </div>
@@ -863,13 +786,13 @@ export default function App() {
             {bottomTab === "diagnostics" ? (
               <div className="diagnostics-grid">
                 <div className="diagnostic-card"><span className="diagnostic-icon"><Activity size={17} /></span><div><span>Received frames</span><strong>{formatNumber(state.diagnostics.receivedFrames)}</strong><small>{state.diagnostics.packetsPerSecond} packets/sec</small></div></div>
-                <div className="diagnostic-card"><span className={`diagnostic-icon${state.diagnostics.droppedFrames ? " warning" : ""}`}><AlertTriangle size={17} /></span><div><span>Dropped frames</span><strong>{formatNumber(state.diagnostics.droppedFrames)}</strong><small>{state.diagnostics.receivedFrames ? ((state.diagnostics.droppedFrames / state.diagnostics.receivedFrames) * 100).toFixed(2) : "0.00"}% of stream</small></div></div>
+                <div className="diagnostic-card"><span className={`diagnostic-icon${state.diagnostics.droppedFrames ? " warning" : ""}`}><AlertTriangle size={17} /></span><div><span>Dropped frames</span><strong>{formatNumber(state.diagnostics.droppedFrames)}</strong><small>{attemptedFrames ? ((state.diagnostics.droppedFrames / attemptedFrames) * 100).toFixed(2) : "0.00"}% of stream</small></div></div>
                 <div className="diagnostic-card"><span className="diagnostic-icon"><Zap size={17} /></span><div><span>Stream latency</span><strong>{state.diagnostics.latencyMs.toFixed(1)} <em>ms</em></strong><small>{state.diagnostics.jitterMs.toFixed(1)} ms jitter</small></div></div>
                 <div className="diagnostic-card"><span className="diagnostic-icon"><Signal size={17} /></span><div><span>Throughput</span><strong>{(state.diagnostics.bytesPerSecond / 1024).toFixed(1)} <em>KB/s</em></strong><small>{state.connection.transport.toUpperCase()} transport</small></div></div>
                 <div className="diagnostics-status-list">
-                  <span><i className={`status-dot ${backendOnline ? "good" : "warning"}`} /> Local bridge <strong>{backendOnline ? "ONLINE" : "DEMO"}</strong></span>
+                  <span><i className={`status-dot ${backendOnline ? "good" : "error"}`} /> Local bridge <strong>{backendOnline ? "ONLINE" : "OFFLINE"}</strong></span>
                   <span><i className={`status-dot ${connected ? "good" : "offline"}`} /> Motion provider <strong>{connected ? "CONNECTED" : "OFFLINE"}</strong></span>
-                  <span><i className={`status-dot ${warningCount ? "warning" : "good"}`} /> Sensor health <strong>{warningCount ? `${warningCount} CHECK` : "NOMINAL"}</strong></span>
+                  <span><i className={`status-dot ${!sensorTelemetryAvailable ? "offline" : warningCount ? "warning" : "good"}`} /> Sensor health <strong>{!connected ? "OFFLINE" : !state.capabilities.receiveSensors ? "UNAVAILABLE" : warningCount ? `${warningCount} CHECK` : "NOMINAL"}</strong></span>
                 </div>
               </div>
             ) : null}
@@ -879,16 +802,16 @@ export default function App() {
 
       <footer className="status-bar">
         <div className="status-left">
-          <span className={`status-dot ${connected ? "good" : "offline"}`} />
-          <strong>{state.connection.status.toUpperCase()}</strong>
-          <span>{state.connection.mode.toUpperCase()} · {state.connection.transport.toUpperCase()}</span>
+          <span className={`status-dot ${previewMode ? "offline" : state.connection.status === "error" ? "error" : connected ? "good" : "offline"}`} />
+          <strong>{previewMode ? "PREVIEW / OFFLINE" : state.connection.status.toUpperCase()}</strong>
+          <span>{previewMode ? "STATIC SAMPLE · NO COMMANDS" : `${state.connection.mode.toUpperCase()} · ${state.connection.transport.toUpperCase()}`}</span>
           <span className="status-separator" />
           <span>{primaryAvatar?.fps ?? 0} FPS</span>
           <span>Frame {primaryAvatar?.frame ?? 0}</span>
-          {warningCount ? <span className="status-warning"><AlertTriangle size={11} /> {warningCount} sensor check{warningCount === 1 ? "" : "s"}</span> : null}
+          {sensorTelemetryAvailable && warningCount ? <span className="status-warning"><AlertTriangle size={11} /> {warningCount} sensor check{warningCount === 1 ? "" : "s"}</span> : null}
         </div>
         <div className="independence-note"><Info size={11} /> Independent open-source MocapApi companion · Not affiliated with or endorsed by Noitom</div>
-        <div className="status-right"><span>{connectionSettings.upAxis} up</span><span>{connectionSettings.handedness === "right" ? "RH" : "LH"}</span><span>{connectionSettings.unit === "meters" ? "m" : "cm"}</span></div>
+        <div className="status-right"><span>{connectionSettings.rotationOrder} rotation</span><span>{connectionSettings.unit === "meters" ? "m" : "cm"}</span></div>
       </footer>
 
       {lastError ? (

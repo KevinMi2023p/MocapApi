@@ -53,7 +53,7 @@ export interface RigidBody {
   tracked: boolean;
 }
 
-export interface Tracker extends RigidBody {}
+export type Tracker = RigidBody;
 
 export interface Take {
   id: string;

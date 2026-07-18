@@ -44,7 +44,18 @@ async function post(path: string, body: unknown): Promise<void> {
     body: JSON.stringify(body),
   });
   if (!response.ok) {
-    const message = await response.text();
+    const body = await response.text();
+    let message = body;
+    if (body) {
+      try {
+        const payload = JSON.parse(body) as { error?: unknown };
+        if (typeof payload.error === "string" && payload.error.trim()) {
+          message = payload.error;
+        }
+      } catch {
+        // Plain-text errors remain valid bridge responses.
+      }
+    }
     throw new Error(message || `Request failed (${response.status})`);
   }
 }

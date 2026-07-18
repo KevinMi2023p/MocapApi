@@ -4,6 +4,8 @@ import type { Sensor } from "../types";
 interface SensorMapProps {
   sensors: Sensor[];
   selectedSensorId: number | null;
+  available: boolean;
+  connected: boolean;
   onSelect: (sensor: Sensor) => void;
 }
 
@@ -20,8 +22,8 @@ function sensorTone(sensor: Sensor) {
   return "good";
 }
 
-export function SensorMap({ sensors, selectedSensorId, onSelect }: SensorMapProps) {
-  const connected = sensors.filter((sensor) => sensor.connected).length;
+export function SensorMap({ sensors, selectedSensorId, available, connected, onSelect }: SensorMapProps) {
+  const connectedCount = sensors.filter((sensor) => sensor.connected).length;
   const unstable = sensors.filter((sensor) => sensor.magnetic === "unstable").length;
   const averageBattery = sensors.length
     ? Math.round(sensors.reduce((sum, sensor) => sum + sensor.battery, 0) / sensors.length)
@@ -30,12 +32,19 @@ export function SensorMap({ sensors, selectedSensorId, onSelect }: SensorMapProp
   return (
     <div className="sensor-map-view">
       <div className="sensor-summary-row">
-        <span><Radio size={12} /> {connected}/{sensors.length}</span>
-        <span><Battery size={12} /> {averageBattery}%</span>
-        <span className={unstable ? "warning-text" : ""}>
-          <ShieldAlert size={12} /> {unstable} mag
+        <span><Radio size={12} /> {available ? `${connectedCount}/${sensors.length}` : "— / —"}</span>
+        <span><Battery size={12} /> {available ? `${averageBattery}%` : "—"}</span>
+        <span className={available && unstable ? "warning-text" : ""}>
+          <ShieldAlert size={12} /> {available ? `${unstable} mag` : "— mag"}
         </span>
       </div>
+
+      {!available ? (
+        <div className="telemetry-unavailable-banner" role="status">
+          <Radio size={14} />
+          <div><strong>Sensor telemetry {connected ? "unavailable" : "offline"}</strong><span>{connected ? "Current provider does not expose sensors" : "Connect a telemetry-capable provider"}</span></div>
+        </div>
+      ) : null}
 
       <div className="sensor-figure" aria-label="Body sensor map">
         <svg viewBox="0 0 100 110" aria-hidden="true" className="sensor-silhouette">
@@ -61,7 +70,7 @@ export function SensorMap({ sensors, selectedSensorId, onSelect }: SensorMapProp
         <span className="side-mark right">R</span>
         {sensors.map((sensor, index) => {
           const [left, top] = SENSOR_POSITIONS[index] ?? [50, 50];
-          const tone = sensorTone(sensor);
+          const tone = available ? sensorTone(sensor) : "offline";
           return (
             <button
               type="button"
@@ -69,8 +78,8 @@ export function SensorMap({ sensors, selectedSensorId, onSelect }: SensorMapProp
               className={`sensor-node ${tone}${selectedSensorId === sensor.id ? " selected" : ""}`}
               style={{ left: `${left}%`, top: `${top}%` }}
               onClick={() => onSelect(sensor)}
-              aria-label={`${sensor.bodyPart}: ${sensor.signal}% signal, ${sensor.magnetic} magnetic field`}
-              title={`${sensor.bodyPart} · ${sensor.signal}% · ${sensor.magnetic}`}
+              aria-label={available ? `${sensor.bodyPart}: ${sensor.signal}% signal, ${sensor.magnetic} magnetic field` : `${sensor.bodyPart}: telemetry unavailable`}
+              title={available ? `${sensor.bodyPart} · ${sensor.signal}% · ${sensor.magnetic}` : `${sensor.bodyPart} · telemetry unavailable`}
             >
               <span className="signal-dot" />
               <span className="magnetic-marker" />

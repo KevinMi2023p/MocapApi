@@ -100,7 +100,7 @@ export const initialState: StudioState = {
       timestamp: new Date().toISOString(),
       level: "info",
       source: "Studio",
-      message: "Operator console ready. Connect to a stream or start Demo mode.",
+      message: "Preview dataset loaded. Start the local bridge to enable provider actions.",
     },
   ],
   diagnostics: {
