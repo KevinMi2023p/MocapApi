@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mocap-studio"
+version = "0.1.0"
+description = "Cross-platform local operator console for Noitom-compatible BVH streams"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "KevinMi2023p" }]
+keywords = ["motion-capture", "BVH", "Noitom", "MocapApi"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+]
+
+[project.scripts]
+mocap-studio = "mocap_studio.__main__:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+mocap_studio = ["static/**/*"]
