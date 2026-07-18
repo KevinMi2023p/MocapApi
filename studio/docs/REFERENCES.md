@@ -50,4 +50,5 @@ No screenshots, logos, meshes, pose animations, or other Noitom assets are redis
 At the audited upstream commit `a62cb6dfc33fc74631c5732bd90f7a91bebe622a`, the
 repository has no `LICENSE`, `COPYING`, or `NOTICE`. GitHub's fork mechanism does not
 turn default-copyright material into open-source software. The app's Apache-2.0 license
-therefore covers only newly authored files under `studio/`.
+therefore covers only newly authored files under `studio/`, the root `install.sh`, and
+the `.github/workflows/mocap-studio-*.yml` workflows identified by their SPDX headers.

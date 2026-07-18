@@ -11,12 +11,16 @@ and Linux.
 See [the Mocap Studio guide](studio/README.md) for installation, Axis broadcast
 setup, supported features, tests, and the compatibility roadmap.
 
-> **License boundary:** the new Mocap Studio application is Apache-2.0, but that
-> does not relicense the surrounding upstream MocapApi snapshot. The audited
-> upstream snapshot has no root license file. Studio release archives therefore
-> use an explicit allow-list and exclude all upstream native libraries, headers,
-> demos, and documentation. Details are in
-> [the third-party notices](studio/THIRD_PARTY_NOTICES.md).
+> **Exact license boundary:** Apache-2.0 in [`studio/LICENSE`](studio/LICENSE)
+> covers project-authored Mocap Studio source, documentation, and packaging
+> under `studio/`, plus the root `install.sh` and
+> `.github/workflows/mocap-studio-*.yml`. Bundled web dependencies retain their
+> own licenses as recorded in
+> [`studio/THIRD_PARTY_NOTICES.md`](studio/THIRD_PARTY_NOTICES.md). Nothing in
+> that license statement applies to or relicenses this root README or any other
+> file inherited from the upstream MocapApi snapshot. The audited upstream
+> snapshot has no root license file. Release archives use an explicit allow-list
+> and exclude all upstream native libraries, headers, demos, and documentation.
 
 **MocapApi** is Noitom's next-generation programming interface for consuming real-time
 motion-capture data streamed from **Axis Studio** and other Noitom

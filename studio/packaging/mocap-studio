@@ -1,0 +1,39 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 KevinMi2023p
+
+set -eu
+
+PROGRAM=$0
+while [ -h "$PROGRAM" ]; do
+    PROGRAM_DIR=$(CDPATH= cd -P "$(dirname "$PROGRAM")" 2>/dev/null && pwd)
+    LINK_TARGET=$(readlink "$PROGRAM")
+    case "$LINK_TARGET" in
+        /*) PROGRAM=$LINK_TARGET ;;
+        *) PROGRAM=$PROGRAM_DIR/$LINK_TARGET ;;
+    esac
+done
+
+PROGRAM_DIR=$(CDPATH= cd -P "$(dirname "$PROGRAM")" 2>/dev/null && pwd)
+APP_DIR=$(CDPATH= cd -P "$PROGRAM_DIR/.." 2>/dev/null && pwd)
+PYTHON_BIN=${MOCAP_STUDIO_PYTHON:-python3}
+
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+    printf '%s\n' "mocap-studio: Python 3.10 or newer is required." >&2
+    exit 1
+fi
+
+if ! "$PYTHON_BIN" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+    printf '%s\n' "mocap-studio: $PYTHON_BIN must be Python 3.10 or newer." >&2
+    exit 1
+fi
+
+if [ ! -f "$APP_DIR/backend/mocap_studio/__main__.py" ]; then
+    printf '%s\n' "mocap-studio: the application payload is incomplete at $APP_DIR." >&2
+    exit 1
+fi
+
+PYTHONPATH=$APP_DIR/backend
+PYTHONNOUSERSITE=1
+export PYTHONPATH PYTHONNOUSERSITE
+exec "$PYTHON_BIN" -m mocap_studio "$@"
