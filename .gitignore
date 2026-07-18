@@ -1,1 +1,10 @@
 /.vs
+
+# Mocap Studio development artifacts
+studio/frontend/node_modules/
+**/__pycache__/
+**/*.py[cod]
+studio/backend/.pytest_cache/
+studio/backend/*.egg-info/
+studio/dist/
+.DS_Store
