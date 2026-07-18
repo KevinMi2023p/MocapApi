@@ -69,6 +69,7 @@ export const initialState: StudioState = {
   session: {
     capturing: false,
     recording: false,
+    recordingTarget: null,
     takeName: "take001",
     elapsedMs: 0,
   },

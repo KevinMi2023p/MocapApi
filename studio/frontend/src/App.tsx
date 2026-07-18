@@ -54,6 +54,7 @@ import type {
   ConnectionSettings,
   EventLogItem,
   Joint,
+  RecordingTarget,
   Sensor,
   StudioState,
   Take,
@@ -209,8 +210,11 @@ export default function App() {
   const [sceneExpanded, setSceneExpanded] = useState(true);
   const [jointFilter, setJointFilter] = useState("");
   const [takeNameDraft, setTakeNameDraft] = useState(initialState.session.takeName);
+  const [recordingTarget, setRecordingTarget] = useState<RecordingTarget>("local");
+  const [recordingCommandPending, setRecordingCommandPending] = useState(false);
   const takeNameDirty = useRef(false);
   const previousRecording = useRef(initialState.session.recording);
+  const activeRecordingTarget = useRef<RecordingTarget>("local");
 
   useEffect(() => {
     let unsubscribe = () => {};
@@ -275,6 +279,30 @@ export default function App() {
   const attemptedFrames = state.diagnostics.receivedFrames + state.diagnostics.droppedFrames;
   const captureWorkspace = workspace === "capture";
 
+  useEffect(() => {
+    if (!state.session.recording || state.session.recordingTarget == null) return;
+    activeRecordingTarget.current = state.session.recordingTarget;
+    setRecordingTarget(state.session.recordingTarget);
+  }, [state.session.recording, state.session.recordingTarget]);
+
+  useEffect(() => {
+    if (state.session.recording || recordingCommandPending) return;
+    setRecordingTarget((current) => {
+      const currentAvailable = current === "local"
+        ? state.capabilities.localRecording
+        : state.capabilities.axisRecording;
+      if (currentAvailable) return current;
+      if (state.capabilities.localRecording) return "local";
+      if (state.capabilities.axisRecording) return "axis";
+      return current;
+    });
+  }, [
+    recordingCommandPending,
+    state.capabilities.axisRecording,
+    state.capabilities.localRecording,
+    state.session.recording,
+  ]);
+
   const execute = useCallback(async (command: string, options: Record<string, unknown> = {}) => {
     setLastError(null);
     if (!backendOnline) {
@@ -321,6 +349,47 @@ export default function App() {
     }
   }, [backendOnline]);
 
+  const recordNow = useCallback(async () => {
+    if (recordingCommandPending) return;
+    const stopping = state.session.recording;
+    const target = stopping
+      ? state.session.recordingTarget ?? activeRecordingTarget.current
+      : recordingTarget;
+    const available = target === "local"
+      ? state.capabilities.localRecording
+      : state.capabilities.axisRecording;
+    if (!stopping && !available) {
+      setLastError(`${target === "local" ? "Local" : "Provider"} recording is unavailable.`);
+      return;
+    }
+
+    if (!stopping) activeRecordingTarget.current = target;
+    setRecordingCommandPending(true);
+    try {
+      await execute(
+        stopping ? "stop_record" : "start_record",
+        stopping
+          ? { target }
+          : target === "local"
+            ? { target, takeName: takeNameDraft }
+            : { target },
+      );
+    } catch {
+      // execute() already exposes the bridge error in the operator workspace.
+    } finally {
+      setRecordingCommandPending(false);
+    }
+  }, [
+    execute,
+    recordingCommandPending,
+    recordingTarget,
+    state.capabilities.axisRecording,
+    state.capabilities.localRecording,
+    state.session.recording,
+    state.session.recordingTarget,
+    takeNameDraft,
+  ]);
+
   const selectJoint = useCallback((joint: Joint) => {
     setSelectedJointId(joint.id);
     if (joint.sensorId) setSelectedSensorId(joint.sensorId);
@@ -340,7 +409,14 @@ export default function App() {
   const captureDisabled = workspaceReason ?? bridgeReason ?? connectionReason ?? (!state.capabilities.serverCommands ? state.capabilities.reason ?? "Provider capture commands are unavailable" : undefined);
   const commandDisabled = workspaceReason ?? bridgeReason ?? connectionReason ?? (!state.capabilities.serverCommands ? state.capabilities.reason ?? "Provider commands are unavailable" : undefined);
   const calibrationDisabled = workspaceReason ?? bridgeReason ?? connectionReason ?? (!state.capabilities.calibrationCommands ? state.capabilities.reason ?? "Calibration commands are unavailable" : undefined);
-  const recordingDisabled = workspaceReason ?? bridgeReason ?? connectionReason ?? (!(state.capabilities.axisRecording || state.capabilities.localRecording) ? state.capabilities.reason ?? "Recording is unavailable" : undefined);
+  const selectedRecordingAvailable = recordingTarget === "local"
+    ? state.capabilities.localRecording
+    : state.capabilities.axisRecording;
+  const recordingDisabled = workspaceReason
+    ?? bridgeReason
+    ?? connectionReason
+    ?? (!state.session.recording && !selectedRecordingAvailable ? state.capabilities.reason ?? "Selected recording target is unavailable" : undefined);
+  const recordingActionDisabled = recordingCommandPending ? "Recording command in progress" : recordingDisabled;
 
   const chooseTake = (take: Take) => {
     setSelectedTakeId(take.id);
@@ -454,12 +530,31 @@ export default function App() {
           </ToolbarAction>
         </div>
         <span className="command-divider flexible" />
+        <div className="recording-target-control">
+          <label htmlFor="recording-target">RECORD TO</label>
+          <select
+            id="recording-target"
+            aria-label="Recording target"
+            value={recordingTarget}
+            disabled={Boolean(recordingDisabled) || state.session.recording || recordingCommandPending}
+            onChange={(event) => {
+              const nextTarget = event.target.value as RecordingTarget;
+              const nextAvailable = nextTarget === "local"
+                ? state.capabilities.localRecording
+                : state.capabilities.axisRecording;
+              if (nextAvailable) setRecordingTarget(nextTarget);
+            }}
+          >
+            <option value="local" disabled={!state.capabilities.localRecording}>Local take</option>
+            <option value="axis" disabled={!state.capabilities.axisRecording}>Provider / Axis</option>
+          </select>
+        </div>
         <div className="take-name-control">
-          <label htmlFor="take-name">TAKE NAME</label>
+          <label htmlFor="take-name">{recordingTarget === "local" ? "LOCAL TAKE NAME" : "PROVIDER RECORDING"}</label>
           <input
             id="take-name"
-            value={takeNameDraft}
-            disabled={state.session.recording}
+            value={recordingTarget === "local" ? takeNameDraft : "Managed by provider"}
+            disabled={recordingTarget !== "local" || state.session.recording || recordingCommandPending}
             onChange={(event) => {
               takeNameDirty.current = true;
               setTakeNameDraft(event.target.value);
@@ -473,14 +568,15 @@ export default function App() {
         </div>
         <ToolbarAction
           label={state.session.recording ? "Stop record" : "Record"}
-          tooltip={state.session.recording ? "Finish and save the current take" : "Start provider or local recording"}
+          tooltip={state.session.recording
+            ? `Stop the ${(state.session.recordingTarget ?? activeRecordingTarget.current) === "local" ? "local" : "provider"} recording`
+            : recordingTarget === "local"
+              ? "Start a crash-recoverable local take"
+              : "Start recording in the connected provider"}
           danger
           active={state.session.recording}
-          disabledReason={recordingDisabled}
-          onClick={() => void execute(
-            state.session.recording ? "stop_record" : "start_record",
-            state.session.recording ? {} : { takeName: takeNameDraft },
-          ).catch(() => {})}
+          disabledReason={recordingActionDisabled}
+          onClick={() => void recordNow()}
         >
           {state.session.recording ? <Square size={17} /> : <CircleDot size={19} />}
         </ToolbarAction>

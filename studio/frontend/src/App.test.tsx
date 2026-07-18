@@ -104,7 +104,7 @@ describe("Mocap Studio operator console", () => {
 
     const controls = within(screen.getByRole("region", { name: "Capture controls" }));
     await waitFor(() => expect(controls.getByRole("button", { name: "Record" })).toBeEnabled());
-    const takeName = screen.getByRole("textbox", { name: "TAKE NAME" });
+    const takeName = screen.getByRole("textbox", { name: "LOCAL TAKE NAME" });
     fireEvent.change(takeName, { target: { value: "hero_take" } });
 
     act(() => pushState?.({
@@ -114,10 +114,11 @@ describe("Mocap Studio operator console", () => {
     expect(takeName).toHaveValue("hero_take");
 
     fireEvent.click(controls.getByRole("button", { name: "Record" }));
-    await waitFor(() => expect(apiMocks.sendCommand).toHaveBeenCalledWith("start_record", { takeName: "hero_take" }));
+    await waitFor(() => expect(apiMocks.sendCommand).toHaveBeenCalledWith("start_record", { target: "local", takeName: "hero_take" }));
 
     act(() => pushState?.(studioState("connected", {
       recording: true,
+      recordingTarget: "local",
       capturing: true,
       takeName: "hero_take",
     })));
@@ -125,7 +126,7 @@ describe("Mocap Studio operator console", () => {
     expect(takeName).toHaveValue("hero_take");
 
     fireEvent.click(controls.getByRole("button", { name: "Stop record" }));
-    await waitFor(() => expect(apiMocks.sendCommand).toHaveBeenLastCalledWith("stop_record", {}));
+    await waitFor(() => expect(apiMocks.sendCommand).toHaveBeenLastCalledWith("stop_record", { target: "local" }));
     act(() => pushState?.(studioState("connected", {
       recording: false,
       capturing: true,
@@ -133,6 +134,58 @@ describe("Mocap Studio operator console", () => {
     })));
     expect(takeName).toBeEnabled();
     expect(takeName).toHaveValue("take002");
+  });
+
+  it("can explicitly start and stop provider-side recording in Demo mode", async () => {
+    apiMocks.fetchState.mockResolvedValue(studioState("connected"));
+    render(<App />);
+
+    const controls = within(screen.getByRole("region", { name: "Capture controls" }));
+    const target = await controls.findByRole("combobox", { name: "Recording target" });
+    expect(within(target).getByRole("option", { name: "Local take" })).toBeEnabled();
+    expect(within(target).getByRole("option", { name: "Provider / Axis" })).toBeEnabled();
+    fireEvent.change(target, { target: { value: "axis" } });
+    expect(target).toHaveValue("axis");
+    expect(screen.getByRole("textbox", { name: "PROVIDER RECORDING" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "PROVIDER RECORDING" })).toHaveValue("Managed by provider");
+
+    fireEvent.click(controls.getByRole("button", { name: "Record" }));
+    await waitFor(() => expect(apiMocks.sendCommand).toHaveBeenLastCalledWith("start_record", { target: "axis" }));
+    act(() => pushState?.(studioState("connected", {
+      recording: true,
+      recordingTarget: "axis",
+      capturing: true,
+    })));
+    fireEvent.click(controls.getByRole("button", { name: "Stop record" }));
+    await waitFor(() => expect(apiMocks.sendCommand).toHaveBeenLastCalledWith("stop_record", { target: "axis" }));
+  });
+
+  it("recovers an active provider recording target and can stop after capabilities drop", async () => {
+    apiMocks.fetchState.mockResolvedValue({
+      ...studioState("connected", {
+        recording: true,
+        recordingTarget: "axis",
+        capturing: true,
+      }),
+      capabilities: {
+        ...initialState.capabilities,
+        axisRecording: false,
+        localRecording: false,
+        reason: "Provider capabilities are no longer available.",
+      },
+    });
+    render(<App />);
+
+    const controls = within(screen.getByRole("region", { name: "Capture controls" }));
+    const stop = await controls.findByRole("button", { name: "Stop record" });
+    await waitFor(() => expect(stop).toBeEnabled());
+    const target = controls.getByRole("combobox", { name: "Recording target" });
+    expect(target).toBeDisabled();
+    expect(target).toHaveValue("axis");
+    expect(screen.getByRole("textbox", { name: "PROVIDER RECORDING" })).toHaveValue("Managed by provider");
+
+    fireEvent.click(stop);
+    await waitFor(() => expect(apiMocks.sendCommand).toHaveBeenLastCalledWith("stop_record", { target: "axis" }));
   });
 
   it("connects a standard BVH source with centimeter output by default", async () => {
@@ -200,6 +253,8 @@ describe("Mocap Studio operator console", () => {
         receiveSensors: false,
         serverCommands: false,
         calibrationCommands: false,
+        axisRecording: false,
+        localRecording: true,
         reason: "BVH is receive-only; provider commands are unavailable.",
       },
       avatars: initialState.avatars.map((avatar) => ({ ...avatar, calibrated: true })),
@@ -210,6 +265,16 @@ describe("Mocap Studio operator console", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Disconnect" })).toBeEnabled());
     expect(controls.getByRole("button", { name: "Capture" })).toBeDisabled();
     expect(screen.getByLabelText(/Capture unavailable: BVH is receive-only/i)).toBeInTheDocument();
+    const recordingTarget = controls.getByRole("combobox", { name: "Recording target" });
+    expect(within(recordingTarget).getByRole("option", { name: "Local take" })).toBeEnabled();
+    expect(within(recordingTarget).getByRole("option", { name: "Provider / Axis" })).toBeDisabled();
+    fireEvent.change(recordingTarget, { target: { value: "axis" } });
+    expect(recordingTarget).toHaveValue("local");
+    fireEvent.click(controls.getByRole("button", { name: "Record" }));
+    await waitFor(() => expect(apiMocks.sendCommand).toHaveBeenLastCalledWith("start_record", {
+      target: "local",
+      takeName: "take001",
+    }));
     expect(screen.getByLabelText("Performer 01: Calibration status unavailable")).toBeInTheDocument();
     expect(screen.queryByLabelText("Performer 01: Calibrated")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: /^Map$/i }));

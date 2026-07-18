@@ -3,6 +3,7 @@ export type Transport = "udp" | "tcp";
 export type WorkspaceTab = "capture" | "edit";
 export type BottomTab = "takes" | "timeline" | "events" | "diagnostics";
 export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
+export type RecordingTarget = "local" | "axis";
 
 export interface Vec3 {
   x: number;
@@ -106,6 +107,7 @@ export interface StudioState {
   session: {
     capturing: boolean;
     recording: boolean;
+    recordingTarget: RecordingTarget | null;
     takeName: string;
     elapsedMs: number;
   };
