@@ -504,26 +504,44 @@ export default function App() {
                   </div>
                 </div>
                 <div className="entity-list">
-                  {state.avatars.map((avatar) => (
-                    <button
-                      type="button"
-                      key={avatar.id}
-                      className={`avatar-card${avatar.id === primaryAvatar?.id ? " selected" : ""}`}
-                      onClick={() => {
-                        setSelectedAvatarId(avatar.id);
-                        setSelectedJointId(avatar.joints[0]?.id ?? null);
-                      }}
-                    >
-                      <span className="avatar-thumbnail"><UserRound size={22} /></span>
-                      <span className="avatar-card-copy">
-                        <strong>{avatar.name}</strong>
-                        <small>{avatar.joints.length} joints · {avatar.fps} fps</small>
-                      </span>
-                      <span className={`avatar-state${avatar.calibrated ? " calibrated" : ""}`} title={avatar.calibrated ? "Calibrated" : "Needs calibration"}>
-                        {avatar.calibrated ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
-                      </span>
-                    </button>
-                  ))}
+                  {state.avatars.map((avatar) => {
+                    const calibrationKnown = connected
+                      && state.capabilities.calibrationCommands
+                      && typeof avatar.calibrated === "boolean";
+                    const calibrationLabel = !calibrationKnown
+                      ? "Calibration status unavailable"
+                      : avatar.calibrated
+                        ? "Calibrated"
+                        : "Needs calibration";
+                    return (
+                      <button
+                        type="button"
+                        key={avatar.id}
+                        className={`avatar-card${avatar.id === primaryAvatar?.id ? " selected" : ""}`}
+                        onClick={() => {
+                          setSelectedAvatarId(avatar.id);
+                          setSelectedJointId(avatar.joints[0]?.id ?? null);
+                        }}
+                      >
+                        <span className="avatar-thumbnail"><UserRound size={22} /></span>
+                        <span className="avatar-card-copy">
+                          <strong>{avatar.name}</strong>
+                          <small>{avatar.joints.length} joints · {avatar.fps} fps</small>
+                        </span>
+                        <span
+                          className={`avatar-state${!calibrationKnown ? " unknown" : avatar.calibrated ? " calibrated" : ""}`}
+                          title={calibrationLabel}
+                          aria-label={`${avatar.name}: ${calibrationLabel}`}
+                        >
+                          {!calibrationKnown
+                            ? <CircleDot size={14} />
+                            : avatar.calibrated
+                              ? <CheckCircle2 size={14} />
+                              : <AlertTriangle size={14} />}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
                 <div className="suit-health-card">
                   <div className="health-card-heading">
@@ -787,7 +805,7 @@ export default function App() {
               <div className="diagnostics-grid">
                 <div className="diagnostic-card"><span className="diagnostic-icon"><Activity size={17} /></span><div><span>Received frames</span><strong>{formatNumber(state.diagnostics.receivedFrames)}</strong><small>{state.diagnostics.packetsPerSecond} packets/sec</small></div></div>
                 <div className="diagnostic-card"><span className={`diagnostic-icon${state.diagnostics.droppedFrames ? " warning" : ""}`}><AlertTriangle size={17} /></span><div><span>Dropped frames</span><strong>{formatNumber(state.diagnostics.droppedFrames)}</strong><small>{attemptedFrames ? ((state.diagnostics.droppedFrames / attemptedFrames) * 100).toFixed(2) : "0.00"}% of stream</small></div></div>
-                <div className="diagnostic-card"><span className="diagnostic-icon"><Zap size={17} /></span><div><span>Stream latency</span><strong>{state.diagnostics.latencyMs.toFixed(1)} <em>ms</em></strong><small>{state.diagnostics.jitterMs.toFixed(1)} ms jitter</small></div></div>
+                <div className="diagnostic-card"><span className="diagnostic-icon"><Zap size={17} /></span><div><span>Stream latency</span><strong>{state.diagnostics.latencyMs == null ? <>— <em>Unavailable</em></> : <>{state.diagnostics.latencyMs.toFixed(1)} <em>ms</em></>}</strong><small>{state.diagnostics.jitterMs.toFixed(1)} ms jitter</small></div></div>
                 <div className="diagnostic-card"><span className="diagnostic-icon"><Signal size={17} /></span><div><span>Throughput</span><strong>{(state.diagnostics.bytesPerSecond / 1024).toFixed(1)} <em>KB/s</em></strong><small>{state.connection.transport.toUpperCase()} transport</small></div></div>
                 <div className="diagnostics-status-list">
                   <span><i className={`status-dot ${backendOnline ? "good" : "error"}`} /> Local bridge <strong>{backendOnline ? "ONLINE" : "OFFLINE"}</strong></span>

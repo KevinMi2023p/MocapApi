@@ -195,6 +195,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .avatar-card-copy small { color: #8d97a2; font-size: 9px; }
 .avatar-state { color: var(--warning); }
 .avatar-state.calibrated { color: var(--good); }
+.avatar-state.unknown { color: var(--dim); }
 
 .suit-health-card { margin: 1px 5px 5px; padding: 7px; border: 1px solid #171a1f; background: #24282e; box-shadow: inset 0 0 0 1px #373c44; }
 .health-card-heading { display: flex; align-items: center; justify-content: space-between; padding-bottom: 6px; margin-bottom: 7px; border-bottom: 1px solid #3a3f47; }

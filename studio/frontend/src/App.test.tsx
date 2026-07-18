@@ -89,6 +89,7 @@ describe("Mocap Studio operator console", () => {
     expect(within(dialog).getByRole("button", { name: "Bridge offline" })).toBeDisabled();
     expect(within(dialog).getByRole("combobox", { name: "Up axis unavailable" })).toBeDisabled();
     expect(within(dialog).getByRole("combobox", { name: "Handedness unavailable" })).toBeDisabled();
+    expect(within(dialog).getByRole("option", { name: "MocapApi runtime (planned)" })).toBeDisabled();
     await waitFor(() => expect(within(dialog).getByRole("combobox", { name: "Connection mode" })).toHaveFocus());
 
     fireEvent.keyDown(document, { key: "Escape" });
@@ -198,8 +199,10 @@ describe("Mocap Studio operator console", () => {
         ...initialState.capabilities,
         receiveSensors: false,
         serverCommands: false,
+        calibrationCommands: false,
         reason: "BVH is receive-only; provider commands are unavailable.",
       },
+      avatars: initialState.avatars.map((avatar) => ({ ...avatar, calibrated: true })),
     };
     apiMocks.fetchState.mockResolvedValue(bvhState);
     const { unmount } = render(<App />);
@@ -207,6 +210,8 @@ describe("Mocap Studio operator console", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Disconnect" })).toBeEnabled());
     expect(controls.getByRole("button", { name: "Capture" })).toBeDisabled();
     expect(screen.getByLabelText(/Capture unavailable: BVH is receive-only/i)).toBeInTheDocument();
+    expect(screen.getByLabelText("Performer 01: Calibration status unavailable")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Performer 01: Calibrated")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: /^Map$/i }));
     expect(screen.getByText("Sensor telemetry unavailable")).toBeInTheDocument();
     expect(screen.queryByText("NOMINAL")).not.toBeInTheDocument();
@@ -237,6 +242,10 @@ describe("Mocap Studio operator console", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: /Diagnostics/i }));
     expect(screen.getByText("10.00% of stream")).toBeInTheDocument();
+    const latencyCard = screen.getByText("Stream latency").closest(".diagnostic-card");
+    expect(latencyCard).toHaveTextContent("— Unavailable");
+    const latencyValue = within(latencyCard as HTMLElement).getByText("Unavailable").closest("strong");
+    expect(latencyValue).not.toHaveTextContent("0.0 ms");
   });
 
   it("keeps scene inspection functional while marking playback controls as planned", () => {

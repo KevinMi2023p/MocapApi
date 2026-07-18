@@ -165,7 +165,7 @@ export function ConnectionDialog({
                   onChange={(event) => setDraft({ ...draft, mode: event.target.value as ConnectionSettings["mode"] })}
                 >
                   <option value="demo">Bridge-hosted demo</option>
-                  <option value="mocap-api">MocapApi command server</option>
+                  <option value="mocap-api" disabled>MocapApi runtime (planned)</option>
                   <option value="bvh">BVH motion stream</option>
                 </select>
               </label>
@@ -432,7 +432,7 @@ export function CalibrationDialog({
             ) : null}
             <div className="calibration-note">
               <CircleHelp size={14} />
-              This console relays MocapApi controls; it does not reproduce the proprietary calibration solver.
+              Compatible providers can relay calibration controls. Demo simulates this flow; calibration solving remains in Axis Studio.
             </div>
           </div>
         </div>

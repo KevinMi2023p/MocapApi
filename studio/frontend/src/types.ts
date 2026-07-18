@@ -42,7 +42,7 @@ export interface Avatar {
   joints: Joint[];
   frame: number;
   fps: number;
-  calibrated: boolean;
+  calibrated?: boolean | null;
 }
 
 export interface RigidBody {
@@ -78,7 +78,7 @@ export interface Diagnostics {
   receivedFrames: number;
   droppedFrames: number;
   jitterMs: number;
-  latencyMs: number;
+  latencyMs: number | null;
   packetsPerSecond: number;
   bytesPerSecond: number;
   lastFrameAt: string | null;
