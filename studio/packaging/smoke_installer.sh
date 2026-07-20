@@ -28,7 +28,13 @@ trap 'exit 1' HUP INT TERM
 cd "$REPOSITORY_ROOT"
 sh -n install.sh
 sh -n studio/packaging/mocap-studio
-python3 studio/packaging/check_versions.py --expected 0.1.0
+EXPECTED_VERSION=$(sed -n 's/^__version__ = "\([^"]*\)"/\1/p' \
+    studio/backend/mocap_studio/__init__.py)
+[ -n "$EXPECTED_VERSION" ] || {
+    printf '%s\n' 'Could not determine the declared Mocap Studio version' >&2
+    exit 1
+}
+python3 studio/packaging/check_versions.py --expected "$EXPECTED_VERSION"
 python3 -m unittest studio/packaging/test_installer_archive.py -v
 python3 -m unittest studio/packaging/test_desktop_integration.py -v
 
@@ -62,9 +68,9 @@ printf '%s\n' '# existing interactive shell configuration' >"$PROFILE_ONE"
 printf '%s\n' '# existing login shell configuration' >"$PROFILE_TWO"
 
 ./install.sh --local "$REPOSITORY_ROOT"
-"$SMOKE_BIN/mocap-studio" --version | grep -Fqx 'mocap-studio 0.1.0'
+"$SMOKE_BIN/mocap-studio" --version | grep -Fqx "mocap-studio $EXPECTED_VERSION"
 [ -x "$APP_LAUNCHER" ]
-"$APP_LAUNCHER" --version | grep -Fqx 'mocap-studio 0.1.0'
+"$APP_LAUNCHER" --version | grep -Fqx "mocap-studio $EXPECTED_VERSION"
 if [ "$(uname -s)" = Darwin ]; then
     [ -f "$APP_BUNDLE/Contents/Info.plist" ]
     [ -f "$APP_BUNDLE/Contents/Resources/.mocap-studio-managed" ]

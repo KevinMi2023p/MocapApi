@@ -91,12 +91,15 @@ jobs:
         env:
           SOURCE_DATE_EPOCH: "0"
         run: |
-          python3 studio/packaging/build_release.py --version 0.1.0 --target "${{ matrix.target }}" --output-dir dist-a
-          python3 studio/packaging/build_release.py --version 0.1.0 --target "${{ matrix.target }}" --output-dir dist-b
-          cmp "dist-a/mocap-studio-0.1.0-${{ matrix.target }}.tar.gz" "dist-b/mocap-studio-0.1.0-${{ matrix.target }}.tar.gz"
+          version="$(sed -n 's/^__version__ = "\([^"]*\)"/\1/p' studio/backend/mocap_studio/__init__.py)"
+          python3 studio/packaging/check_versions.py --expected "$version"
+          python3 studio/packaging/build_release.py --version "$version" --target "${{ matrix.target }}" --output-dir dist-a
+          python3 studio/packaging/build_release.py --version "$version" --target "${{ matrix.target }}" --output-dir dist-b
+          cmp "dist-a/mocap-studio-$version-${{ matrix.target }}.tar.gz" "dist-b/mocap-studio-$version-${{ matrix.target }}.tar.gz"
       - name: Verify source-isolated payload
         run: |
-          tar -tzf "dist-a/mocap-studio-0.1.0-${{ matrix.target }}.tar.gz" > archive.list
+          version="$(sed -n 's/^__version__ = "\([^"]*\)"/\1/p' studio/backend/mocap_studio/__init__.py)"
+          tar -tzf "dist-a/mocap-studio-$version-${{ matrix.target }}.tar.gz" > archive.list
           ! grep -E '/(bin/(linux|win32|android)|lib/|include/|demo/|doc/)' archive.list
           grep -q '/backend/mocap_studio/static/index.html$' archive.list
           grep -q '/desktop/desktop_integration.py$' archive.list
