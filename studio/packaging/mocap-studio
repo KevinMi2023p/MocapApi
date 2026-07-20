@@ -32,14 +32,77 @@ done
 
 PROGRAM_DIR=$(CDPATH= cd -P "$(dirname "$PROGRAM")" 2>/dev/null && pwd)
 APP_DIR=$(CDPATH= cd -P "$PROGRAM_DIR/.." 2>/dev/null && pwd)
+COMPLETION_DIR=$APP_DIR/completions
+if [ ! -d "$COMPLETION_DIR" ] && [ -d "$APP_DIR/packaging/completions" ]; then
+    COMPLETION_DIR=$APP_DIR/packaging/completions
+fi
 PYTHON_BIN=${MOCAP_STUDIO_PYTHON:-python3}
 
-run_management_command() {
-    MANAGEMENT_OPERATION=$1
+update_help() {
+    cat <<'EOF'
+Update Mocap Studio to the latest release.
+
+Usage:
+  mocap-studio update [OPTIONS]
+
+Options:
+  --launch                Launch Mocap Studio after updating.
+  --repo OWNER/REPO       Read releases from a different GitHub repository.
+  --release-base-url URL  Read release assets from URL/TAG/.
+  --tag-prefix PREFIX     Prefix used for release tags (default: studio-v).
+  --no-desktop-integration
+                          Keep desktop integration disabled.
+  -h, --help              Show this help.
+EOF
+}
+
+uninstall_help() {
+    cat <<'EOF'
+Uninstall Mocap Studio while preserving recorded takes.
+
+Usage:
+  mocap-studio uninstall [--yes]
+
+Options:
+  --yes       Confirm non-interactively.
+  -h, --help  Show this help.
+EOF
+}
+
+completion_help() {
+    cat <<'EOF'
+Set up or print shell completion for Mocap Studio.
+
+Usage:
+  mocap-studio completion install
+  mocap-studio completion bash|zsh|fish
+
+Commands:
+  install  Install completion for Bash, Zsh, and Fish for the current user.
+  bash     Print the Bash completion script.
+  zsh      Print the Zsh completion script.
+  fish     Print the Fish completion script.
+
+To activate a printed script only in the current shell:
+  source <(mocap-studio completion bash)
+  source <(mocap-studio completion zsh)
+  mocap-studio completion fish | source
+EOF
+}
+
+command_error() {
+    ERROR_CONTEXT=$1
     shift
+    printf 'mocap-studio: error: %s\n' "$*" >&2
+    printf "Try 'mocap-studio%s --help' for more information.\n" "$ERROR_CONTEXT" >&2
+    exit 2
+}
+
+resolve_installed_layout() {
+    LAYOUT_OPERATION=$1
     [ -n "$COMMAND_ENTRY" ] && [ -L "$COMMAND_ENTRY" ] || {
         printf '%s\n' \
-            "mocap-studio: $MANAGEMENT_OPERATION must be run through the installed command link." >&2
+            "mocap-studio: $LAYOUT_OPERATION must be run through the installed command link." >&2
         exit 1
     }
     INSTALLED_TARGET=$(readlink "$COMMAND_ENTRY")
@@ -70,23 +133,83 @@ run_management_command() {
             exit 1
             ;;
     esac
+}
+
+run_management_command() {
+    MANAGEMENT_OPERATION=$1
+    shift
+    resolve_installed_layout "$MANAGEMENT_OPERATION"
     if [ "$MANAGEMENT_OPERATION" = update ]; then
         INTEGRATION_STATE=$INSTALL_APP_HOME/desktop/.mocap-studio-integration.json
         if [ ! -e "$INTEGRATION_STATE" ] && [ ! -L "$INTEGRATION_STATE" ]; then
             set -- "$@" --no-desktop-integration
         fi
+        COMPLETION_STATE=$INSTALL_APP_HOME/completions/.mocap-studio-integration.json
+        if [ -f "$INSTALL_DIR/completions/completion_integration.py" ] \
+            && [ ! -e "$COMPLETION_STATE" ] && [ ! -L "$COMPLETION_STATE" ]; then
+            set -- "$@" --no-shell-completions
+        fi
+        MANAGEMENT_FLAG=--update
+        MANAGEMENT_CONTEXT=' update'
+    elif [ "$MANAGEMENT_OPERATION" = uninstall ]; then
+        MANAGEMENT_FLAG=--uninstall
+        MANAGEMENT_CONTEXT=' uninstall'
+    else
+        MANAGEMENT_FLAG=--install-completions
+        MANAGEMENT_CONTEXT=' completion'
     fi
-    exec "$INSTALLER" "--$MANAGEMENT_OPERATION" "$@" \
+    MOCAP_STUDIO_CLI_CONTEXT=$MANAGEMENT_CONTEXT
+    export MOCAP_STUDIO_CLI_CONTEXT
+    if [ "$MANAGEMENT_OPERATION" = completion ]; then
+        exec "$INSTALLER" "$MANAGEMENT_FLAG" "$@" \
+            --data-home "$INSTALL_APP_HOME" \
+            --bin-dir "$COMMAND_BIN_DIR"
+    fi
+    exec "$INSTALLER" "$MANAGEMENT_FLAG" "$@" \
         --data-home "$INSTALL_APP_HOME" \
         --bin-dir "$COMMAND_BIN_DIR" \
         --no-modify-path
 }
 
 case ${1-} in
-    update|uninstall)
-        MANAGEMENT_OPERATION=$1
+    help)
         shift
-        run_management_command "$MANAGEMENT_OPERATION" "$@"
+        case ${1-} in
+            '') set -- --help ;;
+            update) [ "$#" -eq 1 ] || command_error '' "help accepts one command name"; update_help; exit 0 ;;
+            uninstall) [ "$#" -eq 1 ] || command_error '' "help accepts one command name"; uninstall_help; exit 0 ;;
+            completion) [ "$#" -eq 1 ] || command_error '' "help accepts one command name"; completion_help; exit 0 ;;
+            *) command_error '' "unknown help topic: $1" ;;
+        esac
+        ;;
+    update)
+        shift
+        case ${1-} in -h|--help) [ "$#" -eq 1 ] || command_error ' update' "--help does not accept arguments"; update_help; exit 0 ;; esac
+        run_management_command update "$@"
+        ;;
+    uninstall)
+        shift
+        case ${1-} in -h|--help) [ "$#" -eq 1 ] || command_error ' uninstall' "--help does not accept arguments"; uninstall_help; exit 0 ;; esac
+        run_management_command uninstall "$@"
+        ;;
+    completion)
+        shift
+        case ${1-} in
+            -h|--help) [ "$#" -eq 1 ] || command_error ' completion' "--help does not accept arguments"; completion_help; exit 0 ;;
+            install) [ "$#" -eq 1 ] || command_error ' completion' "completion install does not accept arguments"; run_management_command completion ;;
+            bash) COMPLETION_FILE=$COMPLETION_DIR/mocap-studio.bash ;;
+            zsh) COMPLETION_FILE=$COMPLETION_DIR/_mocap-studio ;;
+            fish) COMPLETION_FILE=$COMPLETION_DIR/mocap-studio.fish ;;
+            '') command_error ' completion' "a shell or 'install' is required" ;;
+            *) command_error ' completion' "unsupported shell: $1" ;;
+        esac
+        [ "$#" -eq 1 ] || command_error ' completion' "the shell name does not accept arguments"
+        [ -f "$COMPLETION_FILE" ] || {
+            printf '%s\n' "mocap-studio: the completion asset is missing: $COMPLETION_FILE" >&2
+            exit 1
+        }
+        cat "$COMPLETION_FILE"
+        exit 0
         ;;
 esac
 

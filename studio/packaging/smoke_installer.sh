@@ -38,6 +38,9 @@ python3 studio/packaging/check_versions.py --expected "$EXPECTED_VERSION"
 python3 -m unittest studio/packaging/test_installer_archive.py -v
 python3 -m unittest studio/packaging/test_installer_remote.py -v
 python3 -m unittest studio/packaging/test_desktop_integration.py -v
+python3 -m unittest studio/packaging/test_shell_completions.py -v
+python3 -m unittest studio/packaging/test_completion_integration.py -v
+python3 -m unittest studio/packaging/test_cli_help.py -v
 
 mkdir -p "$SMOKE_HOME"
 HOME=$SMOKE_HOME
@@ -65,6 +68,9 @@ case "$(uname -s)" in
 esac
 export SHELL
 TAKES_DIR=$APP_HOME/takes
+BASH_COMPLETION=$HOME/.local/share/bash-completion/completions/mocap-studio
+ZSH_COMPLETION=$HOME/.local/share/zsh/site-functions/_mocap-studio
+FISH_COMPLETION=$HOME/.config/fish/completions/mocap-studio.fish
 printf '%s\n' '# existing interactive shell configuration' >"$PROFILE_ONE"
 printf '%s\n' '# existing login shell configuration' >"$PROFILE_TWO"
 
@@ -87,13 +93,22 @@ head -n 1 "$PROFILE_ONE" | grep -Fqx '# existing interactive shell configuration
 head -n 1 "$PROFILE_TWO" | grep -Fqx '# existing login shell configuration'
 grep -Fxc '# >>> mocap-studio managed PATH >>>' "$PROFILE_ONE" | grep -Fqx '1'
 grep -Fxc '# >>> mocap-studio managed PATH >>>' "$PROFILE_TWO" | grep -Fqx '1'
+grep -Fxc '# >>> mocap-studio managed completion >>>' "$PROFILE_ONE" | grep -Fqx '1'
+[ -f "$BASH_COMPLETION" ]
+[ -f "$ZSH_COMPLETION" ]
+[ -f "$FISH_COMPLETION" ]
 if [ "$(uname -s)" = Darwin ]; then
     env -i HOME="$HOME" SHELL=/bin/zsh PATH=/usr/bin:/bin \
         /bin/zsh -lic 'command -v mocap-studio' | grep -Fqx "$SMOKE_BIN/mocap-studio"
+    env -i HOME="$HOME" SHELL=/bin/zsh PATH=/usr/bin:/bin \
+        /bin/zsh -lic 'typeset -f _mocap_studio >/dev/null'
 else
     env -i HOME="$HOME" SHELL=/bin/bash PATH=/usr/bin:/bin \
         /bin/bash --noprofile --rcfile "$PROFILE_ONE" -ic 'command -v mocap-studio' \
         | grep -Fqx "$SMOKE_BIN/mocap-studio"
+    env -i HOME="$HOME" SHELL=/bin/bash PATH=/usr/bin:/bin \
+        /bin/bash --noprofile --rcfile "$PROFILE_ONE" -ic 'complete -p mocap-studio' \
+        | grep -Fq '_mocap_studio_complete mocap-studio'
 fi
 
 mkdir -p "$TAKES_DIR/sentinel"
@@ -129,6 +144,10 @@ SERVER_PID=
 "$SMOKE_BIN/mocap-studio" uninstall --yes
 [ ! -e "$SMOKE_BIN/mocap-studio" ] && [ ! -L "$SMOKE_BIN/mocap-studio" ]
 [ ! -e "$APP_LAUNCHER" ]
+[ ! -e "$BASH_COMPLETION" ]
+[ ! -e "$ZSH_COMPLETION" ]
+[ ! -e "$FISH_COMPLETION" ]
+! grep -Fq '# >>> mocap-studio managed completion >>>' "$PROFILE_ONE"
 if [ "$(uname -s)" = Darwin ]; then
     [ ! -e "$APP_BUNDLE" ]
 else
@@ -141,6 +160,7 @@ fi
 ./install.sh --local "$REPOSITORY_ROOT"
 grep -Fxc '# >>> mocap-studio managed PATH >>>' "$PROFILE_ONE" | grep -Fqx '1'
 grep -Fxc '# >>> mocap-studio managed PATH >>>' "$PROFILE_TWO" | grep -Fqx '1'
+grep -Fxc '# >>> mocap-studio managed completion >>>' "$PROFILE_ONE" | grep -Fqx '1'
 ./install.sh --uninstall --yes
 [ -f "$TAKES_DIR/sentinel/take.txt" ]
 

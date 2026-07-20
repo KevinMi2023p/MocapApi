@@ -22,6 +22,7 @@ LAUNCH=0
 ASSUME_YES=0
 MODIFY_PATH=1
 DESKTOP_INTEGRATION=1
+SHELL_COMPLETIONS=1
 TEMP_DIR=
 INCOMING_DIR=
 COMMAND_LINK_TEMP=
@@ -32,8 +33,54 @@ VERSIONS_DIR=
 PATH_SETUP_RESULT=
 PATH_PROFILE_ATTEMPTS=0
 PATH_PROFILE_SUCCESSES=0
+VERSION_OPTION_USED=0
+REPOSITORY_OPTION_USED=0
+RELEASE_BASE_OPTION_USED=0
+TAG_PREFIX_OPTION_USED=0
 
 usage() {
+    case "${MOCAP_STUDIO_CLI_CONTEXT:-}" in
+        ' update')
+            cat <<'EOF'
+Update Mocap Studio to the latest release.
+
+Usage:
+  mocap-studio update [OPTIONS]
+
+Options:
+  --launch                Launch Mocap Studio after updating.
+  --repo OWNER/REPO       Read releases from a different GitHub repository.
+  --release-base-url URL  Read release assets from URL/TAG/.
+  --tag-prefix PREFIX     Prefix used for release tags (default: studio-v).
+  --no-desktop-integration
+                          Keep desktop integration disabled.
+  -h, --help              Show this help.
+EOF
+            return
+            ;;
+        ' uninstall')
+            cat <<'EOF'
+Uninstall Mocap Studio while preserving recorded takes.
+
+Usage:
+  mocap-studio uninstall [--yes]
+
+Options:
+  --yes       Confirm non-interactively.
+  -h, --help  Show this help.
+EOF
+            return
+            ;;
+        ' completion')
+            cat <<'EOF'
+Install shell completion for the current user.
+
+Usage:
+  mocap-studio completion install
+EOF
+            return
+            ;;
+    esac
     cat <<'EOF'
 Install Mocap Studio for the current user (never run this script with sudo).
 
@@ -58,6 +105,7 @@ Options:
   --no-modify-path        Do not add the default command directory to shell startup files.
   --no-desktop-integration
                           Do not install an app-drawer entry or macOS app bundle.
+  --no-shell-completions  Do not install Bash, Zsh, or Fish completion.
   --uninstall             Remove installed application versions; preserve all takes.
   --yes                   Confirm uninstall non-interactively.
   -h, --help              Show this help.
@@ -66,6 +114,18 @@ Environment equivalents: MOCAP_STUDIO_REPOSITORY,
 MOCAP_STUDIO_RELEASE_BASE_URL, MOCAP_STUDIO_TAG_PREFIX,
 MOCAP_STUDIO_NO_MODIFY_PATH.
 EOF
+}
+
+usage_error() {
+    printf 'install.sh: error: %s\n' "$*" >&2
+    case "${MOCAP_STUDIO_CLI_CONTEXT:-}" in
+        ' update'|' uninstall'|' completion')
+            printf "Try 'mocap-studio%s --help' for more information.\n" \
+                "$MOCAP_STUDIO_CLI_CONTEXT" >&2
+            ;;
+        *) printf "Try './install.sh --help' for more information.\n" >&2 ;;
+    esac
+    exit 2
 }
 
 die() {
@@ -170,11 +230,12 @@ case "${MOCAP_STUDIO_NO_MODIFY_PATH:-0}" in
 esac
 
 need_value() {
-    [ "$#" -ge 2 ] || die "$1 requires a value"
+    [ "$#" -ge 2 ] || usage_error "$1 requires a value"
 }
 
 select_operation() {
-    [ "$OPERATION_EXPLICIT" -eq 0 ] || die "only one of --update or --uninstall may be used"
+    [ "$OPERATION_EXPLICIT" -eq 0 ] \
+        || usage_error "only one management operation may be used"
     OPERATION=$1
     OPERATION_EXPLICIT=1
 }
@@ -182,8 +243,8 @@ select_operation() {
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --version)
-            need_value "$@"; REQUESTED_VERSION=$2; shift 2 ;;
-        --version=*) REQUESTED_VERSION=${1#*=}; shift ;;
+            need_value "$@"; VERSION_OPTION_USED=1; REQUESTED_VERSION=$2; shift 2 ;;
+        --version=*) VERSION_OPTION_USED=1; REQUESTED_VERSION=${1#*=}; shift ;;
         --local)
             LOCAL_MODE=1
             if [ "$#" -ge 2 ] && [ "${2#-}" = "$2" ]; then
@@ -198,28 +259,48 @@ while [ "$#" -gt 0 ]; do
         --bin-dir)
             need_value "$@"; BIN_DIR_OVERRIDE=$2; shift 2 ;;
         --repo)
-            need_value "$@"; REPOSITORY=$2; shift 2 ;;
+            need_value "$@"; REPOSITORY_OPTION_USED=1; REPOSITORY=$2; shift 2 ;;
         --release-base-url)
-            need_value "$@"; RELEASE_BASE_URL=$2; shift 2 ;;
+            need_value "$@"; RELEASE_BASE_OPTION_USED=1; RELEASE_BASE_URL=$2; shift 2 ;;
         --tag-prefix)
-            need_value "$@"; TAG_PREFIX=$2; shift 2 ;;
+            need_value "$@"; TAG_PREFIX_OPTION_USED=1; TAG_PREFIX=$2; shift 2 ;;
         --launch) LAUNCH=1; shift ;;
         --no-modify-path) MODIFY_PATH=0; shift ;;
         --no-desktop-integration) DESKTOP_INTEGRATION=0; shift ;;
+        --no-shell-completions) SHELL_COMPLETIONS=0; shift ;;
         --update) select_operation update; shift ;;
         --uninstall) select_operation uninstall; shift ;;
+        --install-completions) select_operation completion; shift ;;
         --yes) ASSUME_YES=1; shift ;;
         -h|--help) usage; exit 0 ;;
-        *) die "unknown option: $1" ;;
+        *) usage_error "unknown option: $1" ;;
     esac
 done
 
 [ "$ASSUME_YES" -eq 0 ] || [ "$OPERATION" = uninstall ] \
-    || die "--yes is accepted only with --uninstall"
+    || usage_error "--yes is accepted only with --uninstall"
 [ "$OPERATION" != update ] || [ "$LOCAL_MODE" -eq 0 ] \
-    || die "--update cannot be combined with --local"
+    || usage_error "--update cannot be combined with --local"
 [ "$OPERATION" != update ] || [ "$REQUESTED_VERSION" = latest ] \
-    || die "--update always selects the latest release; do not combine it with --version"
+    || usage_error "--update always selects the latest release; do not combine it with --version"
+if [ "$OPERATION" = uninstall ]; then
+    [ "$LOCAL_MODE" -eq 0 ] \
+        || usage_error "--local is not accepted with --uninstall"
+    [ "$VERSION_OPTION_USED" -eq 0 ] \
+        || usage_error "--version is not accepted with --uninstall"
+    [ "$REPOSITORY_OPTION_USED" -eq 0 ] \
+        || usage_error "--repo is not accepted with --uninstall"
+    [ "$RELEASE_BASE_OPTION_USED" -eq 0 ] \
+        || usage_error "--release-base-url is not accepted with --uninstall"
+    [ "$TAG_PREFIX_OPTION_USED" -eq 0 ] \
+        || usage_error "--tag-prefix is not accepted with --uninstall"
+    [ "$LAUNCH" -eq 0 ] \
+        || usage_error "--launch is not accepted with --uninstall"
+    [ "$DESKTOP_INTEGRATION" -eq 1 ] \
+        || usage_error "--no-desktop-integration is not accepted with --uninstall"
+    [ "$SHELL_COMPLETIONS" -eq 1 ] \
+        || usage_error "--no-shell-completions is not accepted with --uninstall"
+fi
 
 [ "$(id -u)" -ne 0 ] || die "do not run this per-user installer as root or with sudo"
 [ -n "${HOME:-}" ] || die "HOME is not set"
@@ -326,6 +407,24 @@ run_desktop_helper() {
         --home "$HOME" \
         --xdg-data-home "${XDG_DATA_HOME:-}" \
         --version "${VERSION:-0.0.0}"
+}
+
+run_completion_helper() {
+    COMPLETION_OPERATION=$1
+    COMPLETION_HELPER_PATH=$2
+    COMPLETION_INSTALL_PATH=$3
+    COMPLETION_PYTHON_PATH=$4
+    shift 4
+    "$COMPLETION_PYTHON_PATH" "$COMPLETION_HELPER_PATH" "$COMPLETION_OPERATION" \
+        --app-home "$APP_HOME" \
+        --install-dir "$COMPLETION_INSTALL_PATH" \
+        --home "$HOME" \
+        --shell "${SHELL:-}" \
+        --xdg-data-home "${XDG_DATA_HOME:-}" \
+        --xdg-config-home "${XDG_CONFIG_HOME:-}" \
+        --bash-completion-user-dir "${BASH_COMPLETION_USER_DIR:-}" \
+        --zdotdir "${ZDOTDIR:-}" \
+        "$@"
 }
 
 append_posix_path_block() {
@@ -477,6 +576,33 @@ configure_command_path() {
 
 acquire_install_lock
 
+if [ "$OPERATION" = completion ]; then
+    managed_install || die "no managed Mocap Studio installation was found at $COMMAND_PATH"
+    command -v python3 >/dev/null 2>&1 || die "Python 3.10 or newer is required"
+    python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' \
+        >/dev/null 2>&1 || die "Python 3.10 or newer is required"
+    COMPLETION_PYTHON=$(command -v python3)
+    case "$COMPLETION_PYTHON" in
+        /*) ;;
+        *) COMPLETION_PYTHON=$(python3 -c 'import os, sys; print(os.path.abspath(sys.executable))') ;;
+    esac
+    COMPLETION_HELPER=$MANAGED_INSTALL_DIR/completions/completion_integration.py
+    [ -f "$COMPLETION_HELPER" ] \
+        || die "the installed shell-completion helper is missing"
+    COMPLETION_PROFILE_OPTION=
+    if [ "$MODIFY_PATH" -eq 1 ]; then
+        COMPLETION_PROFILE_OPTION=--modify-profile
+    fi
+    run_completion_helper check "$COMPLETION_HELPER" "$MANAGED_INSTALL_DIR" \
+        "$COMPLETION_PYTHON" ${COMPLETION_PROFILE_OPTION:+"$COMPLETION_PROFILE_OPTION"} \
+        || die "shell completion paths are occupied or unsafe"
+    run_completion_helper install "$COMPLETION_HELPER" "$MANAGED_INSTALL_DIR" \
+        "$COMPLETION_PYTHON" ${COMPLETION_PROFILE_OPTION:+"$COMPLETION_PROFILE_OPTION"} \
+        || die "shell completion could not be installed"
+    printf '%s\n' 'Shell completion is installed. Open a new terminal to use it.'
+    exit 0
+fi
+
 if [ "$OPERATION" = update ]; then
     managed_install || die "no managed Mocap Studio installation was found at $COMMAND_PATH"
     UPDATE_FROM_VERSION=$MANAGED_VERSION
@@ -486,6 +612,8 @@ if [ "$OPERATION" = uninstall ]; then
     FOUND=0
     DESKTOP_HELPER=
     DESKTOP_INSTALL_DIR=
+    COMPLETION_HELPER=
+    COMPLETION_INSTALL_DIR=
     if [ -d "$VERSIONS_DIR" ]; then
         for VERSION_DIR in "$VERSIONS_DIR"/mocap-studio-*; do
             [ -d "$VERSION_DIR" ] || continue
@@ -494,6 +622,10 @@ if [ "$OPERATION" = uninstall ]; then
             if [ -f "$VERSION_DIR/desktop/desktop_integration.py" ]; then
                 DESKTOP_HELPER=$VERSION_DIR/desktop/desktop_integration.py
                 DESKTOP_INSTALL_DIR=$VERSION_DIR
+            fi
+            if [ -f "$VERSION_DIR/completions/completion_integration.py" ]; then
+                COMPLETION_HELPER=$VERSION_DIR/completions/completion_integration.py
+                COMPLETION_INSTALL_DIR=$VERSION_DIR
             fi
         done
     fi
@@ -519,6 +651,21 @@ if [ "$OPERATION" = uninstall ]; then
                 || warn "desktop integration could not be completely removed"
         else
             warn "Python 3.10 or newer is unavailable; desktop integration was preserved"
+        fi
+    fi
+    if [ -n "$COMPLETION_HELPER" ]; then
+        if command -v python3 >/dev/null 2>&1 \
+            && python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+            UNINSTALL_COMPLETION_PYTHON=$(command -v python3)
+            case "$UNINSTALL_COMPLETION_PYTHON" in
+                /*) ;;
+                *) UNINSTALL_COMPLETION_PYTHON=$(python3 -c 'import os, sys; print(os.path.abspath(sys.executable))') ;;
+            esac
+            run_completion_helper uninstall "$COMPLETION_HELPER" \
+                "$COMPLETION_INSTALL_DIR" "$UNINSTALL_COMPLETION_PYTHON" \
+                || warn "shell completion could not be completely removed"
+        else
+            warn "Python 3.10 or newer is unavailable; shell completion was preserved"
         fi
     fi
     if managed_command; then
@@ -790,6 +937,14 @@ grep -Fqx "target=$TARGET" "$PAYLOAD/.mocap-studio-bundle" || die "release bundl
 [ -f "$PAYLOAD/backend/mocap_studio/static/index.html" ] || die "release UI is missing"
 [ -f "$PAYLOAD/desktop/desktop_integration.py" ] || die "desktop integration helper is missing"
 [ -f "$PAYLOAD/desktop/mocap-studio.svg" ] || die "desktop application icon is missing"
+[ -f "$PAYLOAD/completions/completion_integration.py" ] \
+    || die "shell-completion helper is missing"
+[ -f "$PAYLOAD/completions/mocap-studio.bash" ] \
+    || die "Bash completion asset is missing"
+[ -f "$PAYLOAD/completions/_mocap-studio" ] \
+    || die "Zsh completion asset is missing"
+[ -f "$PAYLOAD/completions/mocap-studio.fish" ] \
+    || die "Fish completion asset is missing"
 
 INSTALL_DIR=$VERSIONS_DIR/$PAYLOAD_ROOT-$TARGET
 if [ -e "$COMMAND_PATH" ] || [ -L "$COMMAND_PATH" ]; then
@@ -801,6 +956,16 @@ fi
 if [ "$DESKTOP_INTEGRATION" -eq 1 ]; then
     run_desktop_helper check "$PAYLOAD/desktop/desktop_integration.py" "$INSTALL_DIR" "$PYTHON_PATH" \
         || die "desktop integration path is occupied; use --no-desktop-integration to leave it unchanged"
+fi
+if [ "$SHELL_COMPLETIONS" -eq 1 ]; then
+    COMPLETION_PROFILE_OPTION=
+    if [ "$MODIFY_PATH" -eq 1 ]; then
+        COMPLETION_PROFILE_OPTION=--modify-profile
+    fi
+    run_completion_helper check "$PAYLOAD/completions/completion_integration.py" \
+        "$PAYLOAD" "$PYTHON_PATH" \
+        ${COMPLETION_PROFILE_OPTION:+"$COMPLETION_PROFILE_OPTION"} \
+        || die "shell completion path is occupied; use --no-shell-completions to leave it unchanged"
 fi
 mkdir -p "$VERSIONS_DIR" "$BIN_DIR"
 INCOMING_DIR=$VERSIONS_DIR/.incoming.$$
@@ -852,6 +1017,12 @@ if [ "$DESKTOP_INTEGRATION" -eq 1 ]; then
     run_desktop_helper install "$INSTALL_DIR/desktop/desktop_integration.py" "$INSTALL_DIR" "$PYTHON_PATH" \
         || die "application files installed, but desktop integration failed"
 fi
+if [ "$SHELL_COMPLETIONS" -eq 1 ]; then
+    run_completion_helper install \
+        "$INSTALL_DIR/completions/completion_integration.py" "$INSTALL_DIR" \
+        "$PYTHON_PATH" ${COMPLETION_PROFILE_OPTION:+"$COMPLETION_PROFILE_OPTION"} \
+        || die "application files installed, but shell completion failed"
+fi
 
 configure_command_path
 
@@ -863,6 +1034,9 @@ fi
 printf 'Command: %s\n' "$COMMAND_PATH"
 if [ "$DESKTOP_INTEGRATION" -eq 0 ]; then
     printf '%s\n' 'Desktop integration was disabled.'
+fi
+if [ "$SHELL_COMPLETIONS" -eq 0 ]; then
+    printf '%s\n' 'Shell completion was disabled.'
 fi
 case "$PATH_SETUP_RESULT" in
     present) printf '%s\n' 'Run "mocap-studio" from this terminal.' ;;

@@ -127,6 +127,22 @@ def payload_files(root: Path, version: str, target: str) -> list[PayloadFile]:
         / "packaging"
         / "desktop"
         / "desktop_integration.py",
+        "completions/mocap-studio.bash": studio
+        / "packaging"
+        / "completions"
+        / "mocap-studio.bash",
+        "completions/_mocap-studio": studio
+        / "packaging"
+        / "completions"
+        / "_mocap-studio",
+        "completions/mocap-studio.fish": studio
+        / "packaging"
+        / "completions"
+        / "mocap-studio.fish",
+        "completions/completion_integration.py": studio
+        / "packaging"
+        / "completions"
+        / "completion_integration.py",
     }
     for path in required.values():
         require_regular_file(path)

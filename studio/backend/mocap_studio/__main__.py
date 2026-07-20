@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import http.client
 import json
+import re
 import signal
 import sys
 import threading
@@ -16,14 +18,55 @@ from .server import run_server
 from .state import StudioController
 
 
+RUNTIME_OPTIONS = (
+    "-h",
+    "--help",
+    "--port",
+    "--no-browser",
+    "--reuse-existing",
+    "--data-dir",
+    "--version",
+)
+COMMANDS = ("help", "update", "uninstall", "completion")
+
+
+class HelpfulArgumentParser(argparse.ArgumentParser):
+    """Argparse parser that points syntax mistakes back to actionable help."""
+
+    def _suggestion(self, message: str) -> str | None:
+        match = re.match(r"unrecognized arguments?:\s+(\S+)", message)
+        if match is None:
+            return None
+        unknown = match.group(1).split("=", 1)[0]
+        candidates = RUNTIME_OPTIONS if unknown.startswith("-") else COMMANDS
+        matches = difflib.get_close_matches(unknown, candidates, n=1, cutoff=0.72)
+        return matches[0] if matches else None
+
+    def error(self, message: str) -> None:
+        self.print_usage(sys.stderr)
+        self._print_message(f"{self.prog}: error: {message}\n", sys.stderr)
+        if suggestion := self._suggestion(message):
+            self._print_message(f"Did you mean '{suggestion}'?\n", sys.stderr)
+        self._print_message(
+            f"Try '{self.prog} --help' for more information.\n", sys.stderr
+        )
+        self.exit(2)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = HelpfulArgumentParser(
         prog="mocap-studio",
+        allow_abbrev=False,
         description="Launch the local Mocap Studio operator console.",
         epilog=(
-            "Management commands: 'mocap-studio update' installs the latest release; "
-            "'mocap-studio uninstall' removes managed application files and preserves takes."
+            "Commands:\n"
+            "  update       Install the latest Mocap Studio release.\n"
+            "  uninstall    Remove the application while preserving recorded takes.\n"
+            "  completion   Print or install Bash, Zsh, and Fish completion.\n"
+            "  help          Show this help or help for a command.\n\n"
+            "Run 'mocap-studio help COMMAND' for command-specific help."
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--port", type=int, default=8765, help="loopback HTTP port (default: 8765)")
     parser.add_argument("--no-browser", action="store_true", help="do not open the UI in a browser")
@@ -84,10 +127,10 @@ def reopen_existing(
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
-        print("error: --port must be between 0 and 65535", file=sys.stderr)
-        return 2
+        parser.error("--port must be between 0 and 65535")
     if args.reuse_existing and reopen_existing(args.port, open_browser=not args.no_browser):
         return 0
     try:

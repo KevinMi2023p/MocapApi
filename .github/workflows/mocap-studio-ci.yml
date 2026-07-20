@@ -104,6 +104,10 @@ jobs:
           grep -q '/backend/mocap_studio/static/index.html$' archive.list
           grep -q '/libexec/install.sh$' archive.list
           grep -q '/desktop/desktop_integration.py$' archive.list
+          grep -q '/completions/completion_integration.py$' archive.list
+          grep -q '/completions/mocap-studio.bash$' archive.list
+          grep -q '/completions/_mocap-studio$' archive.list
+          grep -q '/completions/mocap-studio.fish$' archive.list
           grep -q '/desktop/mocap-studio.svg$' archive.list
 
   linux-installer-smoke:

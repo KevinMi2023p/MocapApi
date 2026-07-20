@@ -250,6 +250,18 @@ class RemoteInstallerRoutingTests(unittest.TestCase):
             return home / "Applications" / "Mocap Studio.app" / "Contents" / "MacOS" / "mocap-studio"
         return app_home / "desktop" / "mocap-studio"
 
+    def completion_files(self, home: Path) -> tuple[Path, Path, Path]:
+        return (
+            home
+            / ".local"
+            / "share"
+            / "bash-completion"
+            / "completions"
+            / "mocap-studio",
+            home / ".local" / "share" / "zsh" / "site-functions" / "_mocap-studio",
+            home / ".config" / "fish" / "completions" / "mocap-studio.fish",
+        )
+
     def test_default_release_uses_github_api_assets(self) -> None:
         result, records, installed_version = self.install()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -311,6 +323,14 @@ class RemoteInstallerRoutingTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(initial.returncode, 0, initial.stderr)
+            original_completion_files = self.completion_files(home)
+            for completion_file in original_completion_files:
+                self.assertTrue(completion_file.is_file(), completion_file)
+                self.assertEqual(completion_file.stat().st_mode & 0o7777, 0o644)
+                self.assertIn(
+                    "format=mocap-studio-completion-v1",
+                    completion_file.read_text(encoding="utf-8"),
+                )
             old_install = command.resolve().parent.parent
             self.assertEqual(
                 (old_install / "VERSION").read_text(encoding="utf-8").strip(),
@@ -418,6 +438,10 @@ class RemoteInstallerRoutingTests(unittest.TestCase):
                     / "io.github.KevinMi2023p.MocapStudio.desktop"
                 )
             self.assertFalse(changed_surface.exists())
+            for completion_file in original_completion_files:
+                self.assertTrue(completion_file.is_file(), completion_file)
+            for completion_file in self.completion_files(changed_home):
+                self.assertFalse(completion_file.exists(), completion_file)
             update_records = [
                 json.loads(line)
                 for line in log_path.read_text(encoding="utf-8").splitlines()
@@ -448,10 +472,13 @@ class RemoteInstallerRoutingTests(unittest.TestCase):
             self.assertEqual(len(noop_records), 1)
             self.assertTrue(str(noop_records[0]["url"]).endswith("/releases/latest"))
 
-            for invalid_arguments in (
-                ["update", "--version", self.previous_version],
-                ["update", "--local"],
-                ["update", "--uninstall"],
+            for invalid_arguments, help_command in (
+                (["update", "--version", self.previous_version], "update"),
+                (["update", "--local"], "update"),
+                (["update", "--uninstall"], "update"),
+                (["update", "--launhc"], "update"),
+                (["uninstall", "--yess"], "uninstall"),
+                (["uninstall", "--launch"], "uninstall"),
             ):
                 invalid = subprocess.run(
                     [str(command), *invalid_arguments],
@@ -460,7 +487,12 @@ class RemoteInstallerRoutingTests(unittest.TestCase):
                     capture_output=True,
                     check=False,
                 )
-                self.assertNotEqual(invalid.returncode, 0, invalid_arguments)
+                self.assertEqual(invalid.returncode, 2, invalid_arguments)
+                self.assertIn(
+                    f"Try 'mocap-studio {help_command} --help'",
+                    invalid.stderr,
+                    invalid_arguments,
+                )
 
             uninstall = subprocess.run(
                 [str(command), "uninstall", "--yes"],
@@ -476,6 +508,8 @@ class RemoteInstallerRoutingTests(unittest.TestCase):
             self.assertFalse(current_install.exists())
             self.assertFalse(graphical_launcher.exists())
             self.assertFalse(original_surface.exists())
+            for completion_file in original_completion_files:
+                self.assertFalse(completion_file.exists(), completion_file)
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "preserve me\n")
 
     def test_update_preserves_desktop_integration_opt_out(self) -> None:
@@ -533,6 +567,65 @@ class RemoteInstallerRoutingTests(unittest.TestCase):
             self.assertEqual(uninstall.returncode, 0, uninstall.stderr)
             self.assertFalse(os.path.lexists(command))
             self.assertFalse((app_home / "versions").exists())
+
+    def test_update_preserves_shell_completion_opt_out(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home, _log_path, environment = self.mock_environment(root)
+            command = home / ".local" / "bin" / "mocap-studio"
+            initial = subprocess.run(
+                [
+                    "/bin/sh",
+                    str(ROOT / "install.sh"),
+                    "--version",
+                    self.previous_version,
+                    "--no-modify-path",
+                    "--no-desktop-integration",
+                    "--no-shell-completions",
+                ],
+                cwd=ROOT,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(initial.returncode, 0, initial.stderr)
+            for completion_file in self.completion_files(home):
+                self.assertFalse(completion_file.exists(), completion_file)
+
+            update = subprocess.run(
+                [str(command), "update"],
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(update.returncode, 0, update.stderr)
+            for completion_file in self.completion_files(home):
+                self.assertFalse(completion_file.exists(), completion_file)
+
+            enable = subprocess.run(
+                [str(command), "completion", "install"],
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(enable.returncode, 0, enable.stderr)
+            self.assertIn("Shell completion is installed", enable.stdout)
+            for completion_file in self.completion_files(home):
+                self.assertTrue(completion_file.is_file(), completion_file)
+
+            uninstall = subprocess.run(
+                [str(command), "uninstall", "--yes"],
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(uninstall.returncode, 0, uninstall.stderr)
+            for completion_file in self.completion_files(home):
+                self.assertFalse(completion_file.exists(), completion_file)
 
 
 if __name__ == "__main__":

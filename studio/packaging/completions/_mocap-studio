@@ -1,0 +1,126 @@
+#compdef mocap-studio
+# Zsh completion for Mocap Studio.
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 KevinMi2023p
+#
+# grammar top-commands: help update uninstall completion
+# grammar top-options: -h --help --port --no-browser --reuse-existing --data-dir --version
+# grammar help-topics: update uninstall completion
+# grammar update-options: -h --help --launch --repo --release-base-url --tag-prefix --no-desktop-integration
+# grammar uninstall-options: -h --help --yes
+# grammar completion-values: install bash zsh fish
+
+_mocap_studio() {
+    local current previous word command
+    local -a suggestions
+    integer index
+
+    current=${words[CURRENT]}
+    previous=${words[CURRENT-1]}
+    command=
+    index=2
+
+    # Ignore words[1], which can be either `mocap-studio` or a path ending in
+    # that name. Skip launch-option values before looking for a command.
+    while (( index < CURRENT )); do
+        word=${words[index]}
+        case $word in
+            --port|--data-dir)
+                (( index += 2 ))
+                continue
+                ;;
+            --port=*|--data-dir=*)
+                (( index += 1 ))
+                continue
+                ;;
+            help|update|uninstall|completion)
+                command=$word
+                break
+                ;;
+        esac
+        (( index += 1 ))
+    done
+
+    case $command:$previous in
+        :--data-dir)
+            _directories
+            return
+            ;;
+        :--port)
+            _message 'port number'
+            return
+            ;;
+        update:--repo)
+            _message 'GitHub OWNER/REPO'
+            return
+            ;;
+        update:--release-base-url)
+            _message 'release base URL'
+            return
+            ;;
+        update:--tag-prefix)
+            _message 'release tag prefix'
+            return
+            ;;
+    esac
+
+    case $command in
+        '')
+            suggestions=(
+                'help:show help for a management command'
+                'update:update to the latest release'
+                'uninstall:remove managed application files'
+                'completion:print shell completion code'
+                '-h:show help'
+                '--help:show help'
+                '--port:use a loopback HTTP port'
+                '--no-browser:do not open the browser'
+                '--reuse-existing:reopen an existing instance'
+                '--data-dir:override the take library directory'
+                '--version:show the installed version'
+            )
+            _describe 'command or option' suggestions
+            ;;
+        help)
+            suggestions=(
+                'update:update command help'
+                'uninstall:uninstall command help'
+                'completion:completion command help'
+            )
+            _describe 'help topic' suggestions
+            ;;
+        update)
+            suggestions=(
+                '-h:show update help'
+                '--help:show update help'
+                '--launch:launch after updating'
+                '--repo:use a GitHub OWNER/REPO'
+                '--release-base-url:use a release download root'
+                '--tag-prefix:use a release tag prefix'
+                '--no-desktop-integration:do not install graphical integration'
+            )
+            _describe 'update option' suggestions
+            ;;
+        uninstall)
+            suggestions=(
+                '-h:show uninstall help'
+                '--help:show uninstall help'
+                '--yes:confirm uninstall non-interactively'
+            )
+            _describe 'uninstall option' suggestions
+            ;;
+        completion)
+            suggestions=(
+                'install:install completion for the current user'
+                'bash:print Bash completion code'
+                'zsh:print Zsh completion code'
+                'fish:print Fish completion code'
+            )
+            _describe 'shell' suggestions
+            ;;
+    esac
+}
+
+if (( $+functions[compdef] )); then
+    compdef _mocap_studio mocap-studio
+fi
