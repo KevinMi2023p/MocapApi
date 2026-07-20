@@ -7,7 +7,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -474,7 +474,7 @@ class StudioController:
                 self._last_source_frame[frame.avatar_id] = frame.source_frame_index
             diagnostics["packetsPerSecond"] = round(estimated_fps, 1)
             diagnostics["jitterMs"] = round(_jitter_ms(self._frame_intervals), 2)
-            diagnostics["lastFrameAt"] = datetime.now(UTC).isoformat()
+            diagnostics["lastFrameAt"] = datetime.now(timezone.utc).isoformat()
             self._byte_samples.append((now, frame.source_bytes))
             diagnostics["bytesPerSecond"] = _bytes_per_second(self._byte_samples, now)
             self._state["connection"]["message"] = "Receiving motion"
@@ -587,7 +587,7 @@ class StudioController:
                 0,
                 {
                     "id": str(uuid.uuid4()),
-                    "timestamp": datetime.now(UTC).isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "level": level,
                     "source": source,
                     "message": message,
@@ -667,7 +667,7 @@ def _initial_state() -> dict[str, Any]:
         "events": [
             {
                 "id": str(uuid.uuid4()),
-                "timestamp": datetime.now(UTC).isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "level": "info",
                 "source": "Studio",
                 "message": "Operator console ready. Connect a BVH stream or start Demo mode.",

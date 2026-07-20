@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -87,7 +87,7 @@ class TakeRecorder:
             if self._stream is not None:
                 raise RuntimeError("A local take is already recording")
             clean_name = sanitize_take_name(name)
-            timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             take_dir = _unique_directory(self.library_dir, f"{timestamp}_{clean_name}")
             take_dir.mkdir(mode=0o700)
             frames_path = take_dir / "frames.ndjson.partial"
@@ -99,7 +99,7 @@ class TakeRecorder:
             self._name = clean_name
             self._notes = notes[:2000]
             self._started_wall = time.time()
-            self._started_iso = datetime.fromtimestamp(self._started_wall, UTC).isoformat()
+            self._started_iso = datetime.fromtimestamp(self._started_wall, timezone.utc).isoformat()
             self._last_frame = 0
             self._frames = 0
             self._bytes_since_sync = 0
