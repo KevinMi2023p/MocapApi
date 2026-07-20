@@ -5,9 +5,17 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["node_modules/**"] },
   {
-    files: ["*.config.js"],
+    ignores: [
+      "blob-report/**",
+      "dist/**",
+      "node_modules/**",
+      "playwright-report/**",
+      "test-results/**",
+    ],
+  },
+  {
+    files: ["*.config.{js,ts}"],
     ...js.configs.recommended,
     languageOptions: {
       ...js.configs.recommended.languageOptions,

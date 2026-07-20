@@ -18,6 +18,8 @@ source, failure mode, UI state, tests, and platform support are all explicit.
 
 ## Pass 2 — live interoperability matrix
 
+- [x] Add a provenance-backed parity/action ledger and deterministic open-source visual fixtures
+- [ ] Capture private, fixed-version Windows reference states and record measured placement deltas
 - [ ] Validate string and both published 64-byte binary header generations against captured Axis Studio 2/3 data
 - [ ] Validate 1–4 avatars, all six rotations, displacement modes, UDP loss and TCP reconnect
 - [ ] Add saved connection profiles and automatic reconnect with bounded backoff
