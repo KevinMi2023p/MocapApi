@@ -405,7 +405,9 @@ class RemoteInstallerRoutingTests(unittest.TestCase):
             self.assertTrue(old_install.is_dir(), "the running prior version must be retained")
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "preserve me\n")
             graphical_launcher = self.graphical_launcher(home, app_home)
-            self.assertIn(str(current_install), graphical_launcher.read_text(encoding="utf-8"))
+            self.assertIn(
+                os.readlink(command), graphical_launcher.read_text(encoding="utf-8")
+            )
             self.assertTrue(original_surface.exists())
             if platform.system() == "Darwin":
                 changed_surface = changed_home / "Applications" / "Mocap Studio.app"
