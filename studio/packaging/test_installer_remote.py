@@ -188,9 +188,13 @@ class RemoteInstallerRoutingTests(unittest.TestCase):
             }
         )
         for name in (
+            "BASH_COMPLETION_USER_DIR",
             "MOCAP_STUDIO_RELEASE_BASE_URL",
             "MOCAP_STUDIO_REPOSITORY",
             "MOCAP_STUDIO_TAG_PREFIX",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "ZDOTDIR",
         ):
             environment.pop(name, None)
         return home, log_path, environment
