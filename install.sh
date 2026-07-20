@@ -70,6 +70,52 @@ warn() {
     printf 'install.sh: warning: %s\n' "$*" >&2
 }
 
+github_release_value() {
+    RELEASE_JSON_PATH=$1
+    RELEASE_VALUE_KIND=$2
+    RELEASE_ASSET_NAME=${3-}
+    python3 - "$RELEASE_JSON_PATH" "$RELEASE_VALUE_KIND" "$RELEASE_ASSET_NAME" <<'GITHUB_RELEASE_PY'
+import json
+from pathlib import Path
+import sys
+
+
+def fail(message: str) -> None:
+    print(f"GitHub release metadata error: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+path = Path(sys.argv[1])
+kind = sys.argv[2]
+requested_name = sys.argv[3]
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, UnicodeError, json.JSONDecodeError) as error:
+    fail(str(error))
+if not isinstance(data, dict):
+    fail("response is not a JSON object")
+
+if kind == "tag":
+    tag = data.get("tag_name")
+    if not isinstance(tag, str) or not tag:
+        fail("tag_name is missing")
+    print(tag)
+elif kind == "asset":
+    assets = data.get("assets")
+    if not isinstance(assets, list):
+        fail("assets is missing")
+    matches = [asset for asset in assets if isinstance(asset, dict) and asset.get("name") == requested_name]
+    if len(matches) != 1:
+        fail(f"expected exactly one asset named {requested_name!r}, found {len(matches)}")
+    asset_id = matches[0].get("id")
+    if isinstance(asset_id, bool) or not isinstance(asset_id, int) or asset_id <= 0:
+        fail(f"asset {requested_name!r} has an invalid id")
+    print(asset_id)
+else:
+    fail(f"unsupported value kind {kind!r}")
+GITHUB_RELEASE_PY
+}
+
 cleanup() {
     if [ -n "$TEMP_DIR" ] && [ -d "$TEMP_DIR" ]; then
         case "$TEMP_DIR" in
@@ -427,16 +473,29 @@ if [ "$LOCAL_MODE" -eq 1 ]; then
     python3 "$BUILDER" --repository-root "$LOCAL_ROOT" --version "$VERSION" --target "$TARGET" --output-dir "$TEMP_DIR"
 else
     command -v curl >/dev/null 2>&1 || die "curl is required"
+    case "$REPOSITORY" in
+        ''|/*|*/|*/*/*|*[!A-Za-z0-9._/-]*) die "unsafe GitHub repository name: $REPOSITORY" ;;
+        */*) ;;
+        *) die "GitHub repository must be OWNER/REPO: $REPOSITORY" ;;
+    esac
+    GITHUB_RELEASE_JSON=
     if [ "$REQUESTED_VERSION" = latest ]; then
-        LATEST_URL=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPOSITORY/releases/latest") || die "could not resolve the latest release"
-        RELEASE_TAG=${LATEST_URL##*/}
-        [ -n "$RELEASE_TAG" ] && [ "$RELEASE_TAG" != latest ] || die "the latest release tag could not be determined"
+        GITHUB_RELEASE_JSON=$TEMP_DIR/github-release.json
+        curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            -o "$GITHUB_RELEASE_JSON" \
+            "https://api.github.com/repos/$REPOSITORY/releases/latest" \
+            || die "could not resolve the latest release"
+        RELEASE_TAG=$(github_release_value "$GITHUB_RELEASE_JSON" tag) \
+            || die "the latest release tag could not be determined"
     else
         case "$REQUESTED_VERSION" in
             "$TAG_PREFIX"*|v*) RELEASE_TAG=$REQUESTED_VERSION ;;
             *) RELEASE_TAG=$TAG_PREFIX$REQUESTED_VERSION ;;
         esac
     fi
+    case "$RELEASE_TAG" in ''|*[!A-Za-z0-9._-]*) die "unsafe release tag: $RELEASE_TAG" ;; esac
     case "$RELEASE_TAG" in
         "$TAG_PREFIX"*) VERSION=${RELEASE_TAG#"$TAG_PREFIX"} ;;
         v*) VERSION=${RELEASE_TAG#v} ;;
@@ -445,11 +504,34 @@ else
     case "$VERSION" in ''|*[!A-Za-z0-9._-]*) die "unsafe release version: $VERSION" ;; esac
     ASSET=mocap-studio-$VERSION-$TARGET.tar.gz
     if [ -z "$RELEASE_BASE_URL" ]; then
-        RELEASE_BASE_URL=https://github.com/$REPOSITORY/releases/download
+        if [ -z "$GITHUB_RELEASE_JSON" ]; then
+            GITHUB_RELEASE_JSON=$TEMP_DIR/github-release.json
+            curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 \
+                -H 'Accept: application/vnd.github+json' \
+                -H 'X-GitHub-Api-Version: 2022-11-28' \
+                -o "$GITHUB_RELEASE_JSON" \
+                "https://api.github.com/repos/$REPOSITORY/releases/tags/$RELEASE_TAG" \
+                || die "could not resolve release $RELEASE_TAG"
+        fi
+        ARCHIVE_ASSET_ID=$(github_release_value "$GITHUB_RELEASE_JSON" asset "$ASSET") \
+            || die "release archive $ASSET is missing"
+        CHECKSUM_ASSET_ID=$(github_release_value "$GITHUB_RELEASE_JSON" asset "$ASSET.sha256") \
+            || die "release checksum $ASSET.sha256 is missing"
+        curl -fL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 \
+            -H 'Accept: application/octet-stream' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            -o "$TEMP_DIR/$ASSET" \
+            "https://api.github.com/repos/$REPOSITORY/releases/assets/$ARCHIVE_ASSET_ID"
+        curl -fL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 \
+            -H 'Accept: application/octet-stream' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            -o "$TEMP_DIR/$ASSET.sha256" \
+            "https://api.github.com/repos/$REPOSITORY/releases/assets/$CHECKSUM_ASSET_ID"
+    else
+        DOWNLOAD_ROOT=${RELEASE_BASE_URL%/}/$RELEASE_TAG
+        curl -fL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 -o "$TEMP_DIR/$ASSET" "$DOWNLOAD_ROOT/$ASSET"
+        curl -fL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 -o "$TEMP_DIR/$ASSET.sha256" "$DOWNLOAD_ROOT/$ASSET.sha256"
     fi
-    DOWNLOAD_ROOT=${RELEASE_BASE_URL%/}/$RELEASE_TAG
-    curl -fL --proto '=https' --tlsv1.2 --retry 3 -o "$TEMP_DIR/$ASSET" "$DOWNLOAD_ROOT/$ASSET"
-    curl -fL --proto '=https' --tlsv1.2 --retry 3 -o "$TEMP_DIR/$ASSET.sha256" "$DOWNLOAD_ROOT/$ASSET.sha256"
 fi
 
 ASSET=mocap-studio-$VERSION-$TARGET.tar.gz

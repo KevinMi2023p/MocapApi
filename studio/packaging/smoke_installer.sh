@@ -36,6 +36,7 @@ EXPECTED_VERSION=$(sed -n 's/^__version__ = "\([^"]*\)"/\1/p' \
 }
 python3 studio/packaging/check_versions.py --expected "$EXPECTED_VERSION"
 python3 -m unittest studio/packaging/test_installer_archive.py -v
+python3 -m unittest studio/packaging/test_installer_remote.py -v
 python3 -m unittest studio/packaging/test_desktop_integration.py -v
 
 mkdir -p "$SMOKE_HOME"

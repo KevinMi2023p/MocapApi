@@ -25,9 +25,14 @@ Requirements are macOS or Linux, Python 3.10+, a modern browser, and `curl` for
 remote installation. Installation is per-user and never needs `sudo`.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/KevinMi2023p/MocapApi/refs/tags/studio-v0.2.0/install.sh \
-  | sh -s -- --version 0.2.0 --launch
+curl -fsSL https://raw.githubusercontent.com/KevinMi2023p/MocapApi/refs/tags/studio-v0.2.1/install.sh \
+  | sh -s -- --version 0.2.1 --launch
 ```
+
+For GitHub-hosted releases, the installer resolves the exact tagged assets
+through the public GitHub API and verifies the downloaded archive against its
+published SHA-256 sidecar. This also works on networks where GitHub's release
+web pages are unavailable but `api.github.com` and the release CDN are allowed.
 
 The installer also creates a graphical launcher that does not depend on the
 shell `PATH`:
@@ -65,8 +70,8 @@ Useful installer operations:
 ./install.sh --local . --prefix "$HOME/opt/mocap-studio" --launch
 
 # Override release hosting/repository
-./install.sh --repo KevinMi2023p/MocapApi --version 0.2.0
-./install.sh --release-base-url https://downloads.example.test/releases --version 0.2.0
+./install.sh --repo KevinMi2023p/MocapApi --version 0.2.1
+./install.sh --release-base-url https://downloads.example.test/releases --version 0.2.1
 
 # Launch an existing installation, or uninstall with confirmation
 ./install.sh --launch
@@ -158,7 +163,7 @@ library. For a deterministic release archive after building the UI:
 
 ```sh
 python3 studio/packaging/build_release.py \
-  --version 0.2.0 --target linux-x86_64 --output-dir dist
+  --version 0.2.1 --target linux-x86_64 --output-dir dist
 ```
 
 The builder has an explicit allow-list. It packages only the new backend,
