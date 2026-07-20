@@ -19,9 +19,13 @@ RELEASE_BASE_URL=${MOCAP_STUDIO_RELEASE_BASE_URL:-}
 TAG_PREFIX=${MOCAP_STUDIO_TAG_PREFIX:-$DEFAULT_TAG_PREFIX}
 LAUNCH=0
 ASSUME_YES=0
+MODIFY_PATH=1
 TEMP_DIR=
 INCOMING_DIR=
 VERSIONS_DIR=
+PATH_SETUP_RESULT=
+PATH_PROFILE_ATTEMPTS=0
+PATH_PROFILE_SUCCESSES=0
 
 usage() {
     cat <<'EOF'
@@ -43,18 +47,24 @@ Options:
   --release-base-url URL  Release download root; assets are under URL/TAG/.
   --tag-prefix PREFIX     Prefix for a bare version (default: studio-v).
   --launch                Launch after installation, or launch an existing install.
+  --no-modify-path        Do not add the default command directory to shell startup files.
   --uninstall             Remove installed application versions; preserve all takes.
   --yes                   Confirm uninstall non-interactively.
   -h, --help              Show this help.
 
 Environment equivalents: MOCAP_STUDIO_REPOSITORY,
-MOCAP_STUDIO_RELEASE_BASE_URL, MOCAP_STUDIO_TAG_PREFIX.
+MOCAP_STUDIO_RELEASE_BASE_URL, MOCAP_STUDIO_TAG_PREFIX,
+MOCAP_STUDIO_NO_MODIFY_PATH.
 EOF
 }
 
 die() {
     printf 'install.sh: error: %s\n' "$*" >&2
     exit 1
+}
+
+warn() {
+    printf 'install.sh: warning: %s\n' "$*" >&2
 }
 
 cleanup() {
@@ -71,6 +81,12 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
+
+case "${MOCAP_STUDIO_NO_MODIFY_PATH:-0}" in
+    0|false|FALSE|no|NO|'') ;;
+    1|true|TRUE|yes|YES) MODIFY_PATH=0 ;;
+    *) die "MOCAP_STUDIO_NO_MODIFY_PATH must be 0 or 1" ;;
+esac
 
 need_value() {
     [ "$#" -ge 2 ] || die "$1 requires a value"
@@ -101,6 +117,7 @@ while [ "$#" -gt 0 ]; do
         --tag-prefix)
             need_value "$@"; TAG_PREFIX=$2; shift 2 ;;
         --launch) LAUNCH=1; shift ;;
+        --no-modify-path) MODIFY_PATH=0; shift ;;
         --uninstall) OPERATION=uninstall; shift ;;
         --yes) ASSUME_YES=1; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -110,6 +127,7 @@ done
 
 [ "$(id -u)" -ne 0 ] || die "do not run this per-user installer as root or with sudo"
 [ -n "${HOME:-}" ] || die "HOME is not set"
+umask 022
 
 case "$(uname -s)" in
     Darwin) PLATFORM=darwin ; DEFAULT_APP_HOME=$HOME/Library/Application\ Support/Mocap\ Studio ;;
@@ -132,6 +150,10 @@ case "$APP_HOME" in /|"$HOME"|"$HOME"/) die "refusing unsafe application data pa
 
 VERSIONS_DIR=$APP_HOME/versions
 COMMAND_PATH=$BIN_DIR/mocap-studio
+DEFAULT_COMMAND_LOCATION=0
+if [ -z "$PREFIX" ] && [ -z "$BIN_DIR_OVERRIDE" ]; then
+    DEFAULT_COMMAND_LOCATION=1
+fi
 
 managed_command() {
     [ -L "$COMMAND_PATH" ] || return 1
@@ -146,6 +168,153 @@ launch_installed() {
     [ -x "$COMMAND_PATH" ] || die "no runnable install found at $COMMAND_PATH"
     trap - EXIT HUP INT TERM
     exec "$COMMAND_PATH"
+}
+
+append_posix_path_block() {
+    PROFILE_PATH=$1
+    PROFILE_PARENT=$(dirname "$PROFILE_PATH")
+    PATH_PROFILE_ATTEMPTS=$((PATH_PROFILE_ATTEMPTS + 1))
+    if [ -L "$PROFILE_PATH" ] && [ ! -e "$PROFILE_PATH" ]; then
+        warn "cannot configure PATH through broken profile symlink $PROFILE_PATH"
+        return 0
+    fi
+    if [ -e "$PROFILE_PATH" ] && [ ! -f "$PROFILE_PATH" ]; then
+        warn "cannot configure PATH because $PROFILE_PATH is not a regular file"
+        return 0
+    fi
+    if [ -f "$PROFILE_PATH" ]; then
+        PATH_BLOCK_START_FOUND=0
+        PATH_BLOCK_END_FOUND=0
+        grep -Fqx '# >>> mocap-studio managed PATH >>>' "$PROFILE_PATH" && PATH_BLOCK_START_FOUND=1
+        grep -Fqx '# <<< mocap-studio managed PATH <<<' "$PROFILE_PATH" && PATH_BLOCK_END_FOUND=1
+        if [ "$PATH_BLOCK_START_FOUND" -eq 1 ] || [ "$PATH_BLOCK_END_FOUND" -eq 1 ]; then
+            if [ "$PATH_BLOCK_START_FOUND" -eq 1 ] && [ "$PATH_BLOCK_END_FOUND" -eq 1 ]; then
+                PATH_PROFILE_SUCCESSES=$((PATH_PROFILE_SUCCESSES + 1))
+            else
+                warn "managed PATH block is incomplete in $PROFILE_PATH; refusing to append another"
+            fi
+            return 0
+        fi
+    fi
+    if [ ! -d "$PROFILE_PARENT" ] && ! mkdir -p "$PROFILE_PARENT"; then
+        warn "could not create shell configuration directory $PROFILE_PARENT"
+        return 0
+    fi
+    if [ -e "$PROFILE_PATH" ] && [ ! -w "$PROFILE_PATH" ]; then
+        warn "shell profile is not writable: $PROFILE_PATH"
+        return 0
+    fi
+    if [ ! -e "$PROFILE_PATH" ] && [ ! -w "$PROFILE_PARENT" ]; then
+        warn "shell configuration directory is not writable: $PROFILE_PARENT"
+        return 0
+    fi
+    if {
+        [ ! -s "$PROFILE_PATH" ] || printf '\n'
+        cat <<'PATH_BLOCK'
+# >>> mocap-studio managed PATH >>>
+case ":${PATH-}:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) PATH="$HOME/.local/bin${PATH:+:$PATH}"; export PATH ;;
+esac
+# <<< mocap-studio managed PATH <<<
+PATH_BLOCK
+    } >>"$PROFILE_PATH"; then
+        PATH_PROFILE_SUCCESSES=$((PATH_PROFILE_SUCCESSES + 1))
+    else
+        warn "could not update shell profile $PROFILE_PATH"
+    fi
+}
+
+configure_fish_path() {
+    case "${XDG_CONFIG_HOME:-}" in
+        /*) FISH_CONFIG_HOME=$XDG_CONFIG_HOME ;;
+        *) FISH_CONFIG_HOME=$HOME/.config ;;
+    esac
+    FISH_CONFIG_DIR=$FISH_CONFIG_HOME/fish/conf.d
+    FISH_CONFIG_FILE=$FISH_CONFIG_DIR/mocap-studio-path.fish
+    PATH_PROFILE_ATTEMPTS=$((PATH_PROFILE_ATTEMPTS + 1))
+    if [ -e "$FISH_CONFIG_FILE" ] || [ -L "$FISH_CONFIG_FILE" ]; then
+        if [ -f "$FISH_CONFIG_FILE" ] \
+            && grep -Fqx '# >>> mocap-studio managed PATH >>>' "$FISH_CONFIG_FILE" \
+            && grep -Fqx '# <<< mocap-studio managed PATH <<<' "$FISH_CONFIG_FILE"; then
+            PATH_PROFILE_SUCCESSES=$((PATH_PROFILE_SUCCESSES + 1))
+        else
+            warn "refusing to replace unmanaged or incomplete fish configuration $FISH_CONFIG_FILE"
+        fi
+        return 0
+    fi
+    if ! mkdir -p "$FISH_CONFIG_DIR"; then
+        warn "could not create fish configuration directory $FISH_CONFIG_DIR"
+        return 0
+    fi
+    FISH_TEMP_FILE=$(mktemp "$FISH_CONFIG_DIR/.mocap-studio-path.XXXXXX") || {
+        warn "could not create temporary fish configuration in $FISH_CONFIG_DIR"
+        return 0
+    }
+    if cat >"$FISH_TEMP_FILE" <<'FISH_PATH_BLOCK'
+# >>> mocap-studio managed PATH >>>
+if not contains -- "$HOME/.local/bin" $PATH
+    set -gx PATH "$HOME/.local/bin" $PATH
+end
+# <<< mocap-studio managed PATH <<<
+FISH_PATH_BLOCK
+    then
+        if chmod 0644 "$FISH_TEMP_FILE" && mv "$FISH_TEMP_FILE" "$FISH_CONFIG_FILE"; then
+            PATH_PROFILE_SUCCESSES=$((PATH_PROFILE_SUCCESSES + 1))
+        else
+            warn "could not install fish configuration $FISH_CONFIG_FILE"
+            [ ! -e "$FISH_TEMP_FILE" ] || rm -- "$FISH_TEMP_FILE"
+        fi
+    else
+        warn "could not create fish configuration $FISH_CONFIG_FILE"
+        [ ! -e "$FISH_TEMP_FILE" ] || rm -- "$FISH_TEMP_FILE"
+    fi
+}
+
+configure_command_path() {
+    case ":${PATH-}:" in
+        *":$BIN_DIR:"*) PATH_SETUP_RESULT=present; return 0 ;;
+    esac
+    if [ "$MODIFY_PATH" -ne 1 ]; then
+        PATH_SETUP_RESULT=disabled
+        return 0
+    fi
+    if [ "$DEFAULT_COMMAND_LOCATION" -ne 1 ] || [ "$BIN_DIR" != "$HOME/.local/bin" ]; then
+        PATH_SETUP_RESULT=custom
+        return 0
+    fi
+
+    SHELL_PATH=${SHELL:-}
+    case "${SHELL_PATH##*/}" in
+        zsh)
+            append_posix_path_block "$HOME/.zshrc"
+            append_posix_path_block "$HOME/.zprofile"
+            ;;
+        bash)
+            append_posix_path_block "$HOME/.bashrc"
+            if [ -e "$HOME/.bash_profile" ]; then
+                append_posix_path_block "$HOME/.bash_profile"
+            elif [ -e "$HOME/.bash_login" ]; then
+                append_posix_path_block "$HOME/.bash_login"
+            else
+                append_posix_path_block "$HOME/.profile"
+            fi
+            ;;
+        fish) configure_fish_path ;;
+        sh|dash|ash|ksh|mksh|'') append_posix_path_block "$HOME/.profile" ;;
+        *)
+            warn "unsupported login shell ${SHELL:-unknown}; PATH was not changed"
+            ;;
+    esac
+
+    if [ "$PATH_PROFILE_ATTEMPTS" -gt 0 ] \
+        && [ "$PATH_PROFILE_SUCCESSES" -eq "$PATH_PROFILE_ATTEMPTS" ]; then
+        PATH_SETUP_RESULT=configured
+    elif [ "$PATH_PROFILE_SUCCESSES" -gt 0 ]; then
+        PATH_SETUP_RESULT=partial
+    else
+        PATH_SETUP_RESULT=unavailable
+    fi
 }
 
 if [ "$OPERATION" = uninstall ]; then
@@ -183,6 +352,7 @@ if [ "$OPERATION" = uninstall ]; then
 fi
 
 if [ "$LAUNCH" -eq 1 ] && [ "$LOCAL_MODE" -eq 0 ] && [ "$REQUESTED_VERSION" = latest ] && [ -x "$COMMAND_PATH" ]; then
+    configure_command_path
     launch_installed
 fi
 
@@ -398,9 +568,18 @@ if managed_command; then
 fi
 ln -s "$INSTALL_DIR/bin/mocap-studio" "$COMMAND_PATH" || die "could not create command link at $COMMAND_PATH"
 
+configure_command_path
+
 printf 'Installed Mocap Studio %s for %s.\n' "$VERSION" "$TARGET"
 printf 'Command: %s\n' "$COMMAND_PATH"
-case ":$PATH:" in *":$BIN_DIR:"*) ;; *) printf 'Add %s to PATH, or run the command by its full path.\n' "$BIN_DIR" ;; esac
+case "$PATH_SETUP_RESULT" in
+    present) printf '%s\n' 'Run "mocap-studio" from this terminal.' ;;
+    configured) printf '%s\n' 'PATH configured. Open a new terminal, then run "mocap-studio".' ;;
+    partial) printf '%s\n' 'PATH was only partially configured; review the warnings or use the command path shown above.' ;;
+    disabled) printf '%s\n' 'PATH setup was disabled; use the command path shown above.' ;;
+    custom) printf '%s\n' 'Custom command locations are not added to PATH; use the command path shown above.' ;;
+    unavailable) printf '%s\n' 'PATH could not be configured; use the command path shown above.' ;;
+esac
 
 if [ "$LAUNCH" -eq 1 ]; then
     launch_installed

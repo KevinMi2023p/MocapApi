@@ -25,13 +25,19 @@ remote installation. Installation is per-user and never needs `sudo`.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/KevinMi2023p/MocapApi/refs/heads/codex/mocap-studio/install.sh \
-  | sh -s -- --version 0.1.0
-~/.local/bin/mocap-studio
+  | sh -s -- --version 0.1.0 --launch
 ```
 
-Use `--launch` to start immediately. The default command location is
-`~/.local/bin`; add it to `PATH` if necessary. Application versions are stored
-under `~/.local/share/mocap-studio` on Linux and
+The default command location is `~/.local/bin`. When that directory is not
+already available, the installer adds an idempotent, clearly marked PATH block
+to the current user's zsh, Bash, fish, or POSIX shell startup files. Open a new
+terminal before running `mocap-studio`; the `--launch` shown above starts the
+first session immediately. Use `--no-modify-path` (or
+`MOCAP_STUDIO_NO_MODIFY_PATH=1`) to leave shell files unchanged, in which case
+the installer prints the full command path. Custom `--prefix` and `--bin-dir`
+locations are never added automatically.
+
+Application versions are stored under `~/.local/share/mocap-studio` on Linux and
 `~/Library/Application Support/Mocap Studio` on macOS. Takes use the platform's
 normal user-data directory and are never removed by the uninstaller.
 
@@ -49,6 +55,9 @@ Useful installer operations:
 ./install.sh --launch
 ./install.sh --uninstall
 ```
+
+The uninstaller leaves the managed `~/.local/bin` PATH block in place because
+that standard per-user command directory may also contain unrelated tools.
 
 The remote installer detects `linux-x86_64`, `linux-aarch64`,
 `darwin-x86_64`, or `darwin-arm64`, downloads a versioned `.tar.gz` and its
