@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
+from . import APPLICATION_ID, __version__
 from .state import StudioController
 
 
@@ -45,6 +46,8 @@ class StudioRequestHandler(BaseHTTPRequestHandler):
             self._serve_events()
         elif path == "/api/health":
             self._send_json({"status": "ok"})
+        elif path == "/api/instance":
+            self._send_json({"application": APPLICATION_ID, "version": __version__})
         else:
             self._serve_static(path, include_body=True)
 
@@ -90,7 +93,7 @@ class StudioRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         # Keep terminal output useful; health polling and SSE reconnects are not
         # actionable access-log entries for a local desktop service.
-        if self.path == "/api/health":
+        if self.path in {"/api/health", "/api/instance"}:
             return
         super().log_message(format, *args)
 

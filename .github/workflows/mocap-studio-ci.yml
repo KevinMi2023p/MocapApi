@@ -37,6 +37,8 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm test -- --passWithNoTests
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:visual
       - run: npm run build
       - name: Verify generated runtime notices
         working-directory: .
@@ -97,6 +99,8 @@ jobs:
           tar -tzf "dist-a/mocap-studio-0.1.0-${{ matrix.target }}.tar.gz" > archive.list
           ! grep -E '/(bin/(linux|win32|android)|lib/|include/|demo/|doc/)' archive.list
           grep -q '/backend/mocap_studio/static/index.html$' archive.list
+          grep -q '/desktop/desktop_integration.py$' archive.list
+          grep -q '/desktop/mocap-studio.svg$' archive.list
 
   linux-installer-smoke:
     runs-on: ubuntu-latest

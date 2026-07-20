@@ -6,7 +6,9 @@ This development branch adds **Mocap Studio**, an independent Axis-inspired
 operator console for standard BVH streams. It provides a live 3D skeleton,
 provider-aware capture controls, sensor/scene inspection, diagnostics, and
 crash-recoverable local takes through the same browser-based interface on macOS
-and Linux.
+and Linux. The per-user installer adds an Ubuntu/Linux application entry and a
+macOS app bundle, both using absolute launch paths so users do not need to edit
+their `PATH` to start the graphical application.
 
 See [the Mocap Studio guide](studio/README.md) for installation, Axis broadcast
 setup, supported features, tests, and the compatibility roadmap.

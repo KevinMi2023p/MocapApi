@@ -20,6 +20,7 @@ TAG_PREFIX=${MOCAP_STUDIO_TAG_PREFIX:-$DEFAULT_TAG_PREFIX}
 LAUNCH=0
 ASSUME_YES=0
 MODIFY_PATH=1
+DESKTOP_INTEGRATION=1
 TEMP_DIR=
 INCOMING_DIR=
 VERSIONS_DIR=
@@ -48,6 +49,8 @@ Options:
   --tag-prefix PREFIX     Prefix for a bare version (default: studio-v).
   --launch                Launch after installation, or launch an existing install.
   --no-modify-path        Do not add the default command directory to shell startup files.
+  --no-desktop-integration
+                          Do not install an app-drawer entry or macOS app bundle.
   --uninstall             Remove installed application versions; preserve all takes.
   --yes                   Confirm uninstall non-interactively.
   -h, --help              Show this help.
@@ -118,6 +121,7 @@ while [ "$#" -gt 0 ]; do
             need_value "$@"; TAG_PREFIX=$2; shift 2 ;;
         --launch) LAUNCH=1; shift ;;
         --no-modify-path) MODIFY_PATH=0; shift ;;
+        --no-desktop-integration) DESKTOP_INTEGRATION=0; shift ;;
         --uninstall) OPERATION=uninstall; shift ;;
         --yes) ASSUME_YES=1; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -167,7 +171,22 @@ managed_command() {
 launch_installed() {
     [ -x "$COMMAND_PATH" ] || die "no runnable install found at $COMMAND_PATH"
     trap - EXIT HUP INT TERM
-    exec "$COMMAND_PATH"
+    exec "$COMMAND_PATH" --reuse-existing
+}
+
+run_desktop_helper() {
+    DESKTOP_OPERATION=$1
+    DESKTOP_HELPER_PATH=$2
+    DESKTOP_INSTALL_PATH=$3
+    DESKTOP_PYTHON_PATH=$4
+    "$DESKTOP_PYTHON_PATH" "$DESKTOP_HELPER_PATH" "$DESKTOP_OPERATION" \
+        --platform "$PLATFORM" \
+        --app-home "$APP_HOME" \
+        --install-dir "$DESKTOP_INSTALL_PATH" \
+        --python "$DESKTOP_PYTHON_PATH" \
+        --home "$HOME" \
+        --xdg-data-home "${XDG_DATA_HOME:-}" \
+        --version "${VERSION:-0.0.0}"
 }
 
 append_posix_path_block() {
@@ -319,11 +338,17 @@ configure_command_path() {
 
 if [ "$OPERATION" = uninstall ]; then
     FOUND=0
+    DESKTOP_HELPER=
+    DESKTOP_INSTALL_DIR=
     if [ -d "$VERSIONS_DIR" ]; then
         for VERSION_DIR in "$VERSIONS_DIR"/mocap-studio-*; do
             [ -d "$VERSION_DIR" ] || continue
             [ -f "$VERSION_DIR/.mocap-studio-bundle" ] || continue
             FOUND=1
+            if [ -f "$VERSION_DIR/desktop/desktop_integration.py" ]; then
+                DESKTOP_HELPER=$VERSION_DIR/desktop/desktop_integration.py
+                DESKTOP_INSTALL_DIR=$VERSION_DIR
+            fi
         done
     fi
     if [ "$FOUND" -eq 0 ] && ! managed_command; then
@@ -335,6 +360,20 @@ if [ "$OPERATION" = uninstall ]; then
         printf 'Remove Mocap Studio application files from "%s"? Takes are preserved. [y/N] ' "$APP_HOME" >/dev/tty
         IFS= read -r REPLY </dev/tty || die "could not read confirmation"
         case "$REPLY" in y|Y|yes|YES) ;; *) printf '%s\n' "Uninstall cancelled."; exit 0 ;; esac
+    fi
+    if [ -n "$DESKTOP_HELPER" ]; then
+        if command -v python3 >/dev/null 2>&1 \
+            && python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+            UNINSTALL_PYTHON=$(command -v python3)
+            case "$UNINSTALL_PYTHON" in
+                /*) ;;
+                *) UNINSTALL_PYTHON=$(python3 -c 'import os, sys; print(os.path.abspath(sys.executable))') ;;
+            esac
+            run_desktop_helper uninstall "$DESKTOP_HELPER" "$DESKTOP_INSTALL_DIR" "$UNINSTALL_PYTHON" \
+                || warn "desktop integration could not be completely removed"
+        else
+            warn "Python 3.10 or newer is unavailable; desktop integration was preserved"
+        fi
     fi
     if managed_command; then
         rm -- "$COMMAND_PATH"
@@ -366,6 +405,12 @@ TARGET=$PLATFORM-$MACHINE
 
 command -v python3 >/dev/null 2>&1 || die "Python 3.10 or newer is required"
 python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' || die "Python 3.10 or newer is required"
+PYTHON_PATH=$(command -v python3)
+case "$PYTHON_PATH" in
+    /*) ;;
+    *) PYTHON_PATH=$(python3 -c 'import os, sys; print(os.path.abspath(sys.executable))') ;;
+esac
+case "$PYTHON_PATH" in /*) ;; *) die "could not resolve an absolute Python path" ;; esac
 TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/mocap-studio-install.XXXXXX") || die "could not create a temporary directory"
 
 if [ "$LOCAL_MODE" -eq 1 ]; then
@@ -549,6 +594,8 @@ grep -Fqx "version=$VERSION" "$PAYLOAD/.mocap-studio-bundle" || die "release bun
 grep -Fqx "target=$TARGET" "$PAYLOAD/.mocap-studio-bundle" || die "release bundle target does not match"
 [ -x "$PAYLOAD/bin/mocap-studio" ] || die "release launcher is missing"
 [ -f "$PAYLOAD/backend/mocap_studio/static/index.html" ] || die "release UI is missing"
+[ -f "$PAYLOAD/desktop/desktop_integration.py" ] || die "desktop integration helper is missing"
+[ -f "$PAYLOAD/desktop/mocap-studio.svg" ] || die "desktop application icon is missing"
 
 INSTALL_DIR=$VERSIONS_DIR/$PAYLOAD_ROOT-$TARGET
 if [ -e "$COMMAND_PATH" ] || [ -L "$COMMAND_PATH" ]; then
@@ -556,6 +603,10 @@ if [ -e "$COMMAND_PATH" ] || [ -L "$COMMAND_PATH" ]; then
 fi
 if [ -e "$INSTALL_DIR" ]; then
     die "version $VERSION is already installed at $INSTALL_DIR; refusing to overwrite it"
+fi
+if [ "$DESKTOP_INTEGRATION" -eq 1 ]; then
+    run_desktop_helper check "$PAYLOAD/desktop/desktop_integration.py" "$INSTALL_DIR" "$PYTHON_PATH" \
+        || die "desktop integration path is occupied; use --no-desktop-integration to leave it unchanged"
 fi
 mkdir -p "$VERSIONS_DIR" "$BIN_DIR"
 INCOMING_DIR=$VERSIONS_DIR/.incoming.$$
@@ -568,10 +619,18 @@ if managed_command; then
 fi
 ln -s "$INSTALL_DIR/bin/mocap-studio" "$COMMAND_PATH" || die "could not create command link at $COMMAND_PATH"
 
+if [ "$DESKTOP_INTEGRATION" -eq 1 ]; then
+    run_desktop_helper install "$INSTALL_DIR/desktop/desktop_integration.py" "$INSTALL_DIR" "$PYTHON_PATH" \
+        || die "application files installed, but desktop integration failed"
+fi
+
 configure_command_path
 
 printf 'Installed Mocap Studio %s for %s.\n' "$VERSION" "$TARGET"
 printf 'Command: %s\n' "$COMMAND_PATH"
+if [ "$DESKTOP_INTEGRATION" -eq 0 ]; then
+    printf '%s\n' 'Desktop integration was disabled.'
+fi
 case "$PATH_SETUP_RESULT" in
     present) printf '%s\n' 'Run "mocap-studio" from this terminal.' ;;
     configured) printf '%s\n' 'PATH configured. Open a new terminal, then run "mocap-studio".' ;;

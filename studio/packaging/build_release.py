@@ -121,6 +121,11 @@ def payload_files(root: Path, version: str, target: str) -> list[PayloadFile]:
         "THIRD_PARTY_NOTICES.md": studio / "THIRD_PARTY_NOTICES.md",
         "backend/pyproject.toml": studio / "backend" / "pyproject.toml",
         "bin/mocap-studio": studio / "packaging" / "mocap-studio",
+        "desktop/mocap-studio.svg": studio / "packaging" / "desktop" / "mocap-studio.svg",
+        "desktop/desktop_integration.py": studio
+        / "packaging"
+        / "desktop"
+        / "desktop_integration.py",
     }
     for path in required.values():
         require_regular_file(path)

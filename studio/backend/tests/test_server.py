@@ -8,6 +8,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from mocap_studio import APPLICATION_ID, __version__
+from mocap_studio.__main__ import existing_instance_url, main
+from mocap_studio.recording import TakeLibraryBusyError
 from mocap_studio.server import run_server
 
 
@@ -59,6 +62,11 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body), {"status": "ok"})
         self.assertIn("Content-Security-Policy", headers)
+        status, _, body = self.request("GET", "/api/instance")
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            json.loads(body), {"application": APPLICATION_ID, "version": __version__}
+        )
         status, _, _ = self.request("GET", "/api/health", headers={"Host": "evil.example"})
         self.assertEqual(status, 403)
         status, _, _ = self.request("GET", "/api/health", headers={"Host": "127.999.1.1"})
@@ -85,6 +93,36 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body, b"")
         self.assertEqual(int(headers["Content-Length"]), len(b"window.ok=true"))
+
+    def test_desktop_reuses_and_reopens_only_a_recognized_instance(self) -> None:
+        self.assertEqual(existing_instance_url(self.port), f"http://127.0.0.1:{self.port}/")
+        with patch("mocap_studio.__main__.webbrowser.open") as open_browser:
+            self.assertEqual(main(["--port", str(self.port), "--reuse-existing"]), 0)
+        open_browser.assert_called_once_with(f"http://127.0.0.1:{self.port}/")
+
+        with patch("mocap_studio.__main__.webbrowser.open") as open_browser:
+            self.assertEqual(
+                main(
+                    [
+                        "--port",
+                        str(self.port),
+                        "--reuse-existing",
+                        "--no-browser",
+                    ]
+                ),
+                0,
+            )
+        open_browser.assert_not_called()
+
+    def test_desktop_launch_race_retries_after_take_lock_contention(self) -> None:
+        busy = TakeLibraryBusyError("the take library is already open")
+        with (
+            patch("mocap_studio.__main__.reopen_existing", side_effect=[False, True]) as reopen,
+            patch("mocap_studio.__main__.StudioController", side_effect=busy),
+        ):
+            self.assertEqual(main(["--reuse-existing", "--no-browser"]), 0)
+        self.assertEqual(reopen.call_count, 2)
+        self.assertEqual(reopen.call_args_list[1].kwargs["attempts"], 10)
 
 
 if __name__ == "__main__":

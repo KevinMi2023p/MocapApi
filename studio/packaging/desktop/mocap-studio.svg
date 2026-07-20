@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Copyright 2026 KevinMi2023p -->
+<!-- mocap-studio installer-managed icon; independently created for this project. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">Mocap Studio</title>
+  <desc id="desc">An abstract connected motion-capture figure on a dark field.</desc>
+  <defs>
+    <linearGradient id="surface" x1="14" y1="10" x2="112" y2="120" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#253247"/>
+      <stop offset="1" stop-color="#0b111c"/>
+    </linearGradient>
+    <linearGradient id="motion" x1="36" y1="29" x2="91" y2="104" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7ce9ff"/>
+      <stop offset="1" stop-color="#25a7e8"/>
+    </linearGradient>
+  </defs>
+  <rect x="5" y="5" width="118" height="118" rx="25" fill="url(#surface)" stroke="#34445d" stroke-width="4"/>
+  <g fill="none" stroke="url(#motion)" stroke-linecap="round" stroke-linejoin="round" stroke-width="7">
+    <path d="M64 42v30M64 53 39 65M64 53l25 12M64 72 45 99M64 72l20 27"/>
+    <path d="M27 92c9-8 16-11 23-10M101 92c-9-8-16-11-23-10" opacity=".45" stroke-width="4"/>
+  </g>
+  <g fill="#d9f8ff" stroke="#25a7e8" stroke-width="3">
+    <circle cx="64" cy="30" r="10"/>
+    <circle cx="64" cy="53" r="5"/>
+    <circle cx="39" cy="65" r="5"/>
+    <circle cx="89" cy="65" r="5"/>
+    <circle cx="64" cy="72" r="5"/>
+    <circle cx="45" cy="99" r="5"/>
+    <circle cx="84" cy="99" r="5"/>
+  </g>
+</svg>

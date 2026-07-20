@@ -30,6 +30,7 @@ sh -n install.sh
 sh -n studio/packaging/mocap-studio
 python3 studio/packaging/check_versions.py --expected 0.1.0
 python3 -m unittest studio/packaging/test_installer_archive.py -v
+python3 -m unittest studio/packaging/test_desktop_integration.py -v
 
 mkdir -p "$SMOKE_HOME"
 HOME=$SMOKE_HOME
@@ -39,12 +40,17 @@ case "$(uname -s)" in
     Darwin)
         SHELL=/bin/zsh
         APP_HOME=$HOME/Library/Application\ Support/Mocap\ Studio
+        APP_LAUNCHER=$HOME/Applications/Mocap\ Studio.app/Contents/MacOS/mocap-studio
+        APP_BUNDLE=$HOME/Applications/Mocap\ Studio.app
         PROFILE_ONE=$HOME/.zshrc
         PROFILE_TWO=$HOME/.zprofile
         ;;
     Linux)
         SHELL=/bin/bash
         APP_HOME=$HOME/.local/share/mocap-studio
+        APP_LAUNCHER=$APP_HOME/desktop/mocap-studio
+        DESKTOP_ENTRY=$HOME/.local/share/applications/io.github.KevinMi2023p.MocapStudio.desktop
+        DESKTOP_ICON=$HOME/.local/share/icons/hicolor/scalable/apps/io.github.KevinMi2023p.MocapStudio.svg
         PROFILE_ONE=$HOME/.bashrc
         PROFILE_TWO=$HOME/.profile
         ;;
@@ -57,6 +63,19 @@ printf '%s\n' '# existing login shell configuration' >"$PROFILE_TWO"
 
 ./install.sh --local "$REPOSITORY_ROOT"
 "$SMOKE_BIN/mocap-studio" --version | grep -Fqx 'mocap-studio 0.1.0'
+[ -x "$APP_LAUNCHER" ]
+"$APP_LAUNCHER" --version | grep -Fqx 'mocap-studio 0.1.0'
+if [ "$(uname -s)" = Darwin ]; then
+    [ -f "$APP_BUNDLE/Contents/Info.plist" ]
+    [ -f "$APP_BUNDLE/Contents/Resources/.mocap-studio-managed" ]
+    plutil -lint "$APP_BUNDLE/Contents/Info.plist" >/dev/null
+else
+    [ -f "$DESKTOP_ENTRY" ]
+    [ -f "$DESKTOP_ICON" ]
+    grep -Fqx "Exec=\"$APP_LAUNCHER\"" "$DESKTOP_ENTRY"
+    grep -Fqx 'Terminal=false' "$DESKTOP_ENTRY"
+    grep -Fqx 'X-Mocap-Studio-Managed=true' "$DESKTOP_ENTRY"
+fi
 head -n 1 "$PROFILE_ONE" | grep -Fqx '# existing interactive shell configuration'
 head -n 1 "$PROFILE_TWO" | grep -Fqx '# existing login shell configuration'
 grep -Fxc '# >>> mocap-studio managed PATH >>>' "$PROFILE_ONE" | grep -Fqx '1'
@@ -102,6 +121,13 @@ wait "$SERVER_PID" || true
 SERVER_PID=
 ./install.sh --uninstall --yes
 [ ! -e "$SMOKE_BIN/mocap-studio" ]
+[ ! -e "$APP_LAUNCHER" ]
+if [ "$(uname -s)" = Darwin ]; then
+    [ ! -e "$APP_BUNDLE" ]
+else
+    [ ! -e "$DESKTOP_ENTRY" ]
+    [ ! -e "$DESKTOP_ICON" ]
+fi
 [ -f "$TAKES_DIR/sentinel/take.txt" ]
 
 # Reinstalling must reuse, not duplicate, the managed shell configuration.
@@ -121,6 +147,18 @@ HOME=$OPT_OUT_HOME SHELL=$SHELL ./install.sh --local "$REPOSITORY_ROOT" --no-mod
 [ ! -e "$OPT_OUT_HOME/.profile" ]
 HOME=$OPT_OUT_HOME SHELL=$SHELL ./install.sh --uninstall --yes --no-modify-path
 
+# Desktop integration may be explicitly disabled without affecting the CLI.
+NO_DESKTOP_HOME=$SMOKE_ROOT/no-desktop-home
+mkdir -p "$NO_DESKTOP_HOME"
+HOME=$NO_DESKTOP_HOME SHELL=$SHELL ./install.sh --local "$REPOSITORY_ROOT" \
+    --no-modify-path --no-desktop-integration
+if [ "$(uname -s)" = Darwin ]; then
+    [ ! -e "$NO_DESKTOP_HOME/Applications/Mocap Studio.app" ]
+else
+    [ ! -e "$NO_DESKTOP_HOME/.local/share/applications/io.github.KevinMi2023p.MocapStudio.desktop" ]
+fi
+HOME=$NO_DESKTOP_HOME SHELL=$SHELL ./install.sh --uninstall --yes --no-modify-path
+
 # An interrupted managed block must be reported, not duplicated or called a success.
 PARTIAL_HOME=$SMOKE_ROOT/partial-home
 mkdir -p "$PARTIAL_HOME"
@@ -139,5 +177,23 @@ grep -Fq 'PATH was only partially configured' "$SMOKE_ROOT/partial.log"
 grep -Fxc '# >>> mocap-studio managed PATH >>>' "$PARTIAL_ONE" | grep -Fqx '1'
 grep -Fxc '# >>> mocap-studio managed PATH >>>' "$PARTIAL_TWO" | grep -Fqx '1'
 HOME=$PARTIAL_HOME SHELL=$SHELL ./install.sh --uninstall --yes
+
+# An unmanaged app entry/bundle must never be overwritten.
+COLLISION_HOME=$SMOKE_ROOT/collision-home
+mkdir -p "$COLLISION_HOME"
+if [ "$(uname -s)" = Darwin ]; then
+    COLLISION_TARGET=$COLLISION_HOME/Applications/Mocap\ Studio.app/keep.txt
+else
+    COLLISION_TARGET=$COLLISION_HOME/.local/share/applications/io.github.KevinMi2023p.MocapStudio.desktop
+fi
+mkdir -p "$(dirname "$COLLISION_TARGET")"
+printf '%s\n' 'unmanaged sentinel' >"$COLLISION_TARGET"
+if HOME=$COLLISION_HOME SHELL=$SHELL ./install.sh --local "$REPOSITORY_ROOT" \
+    --no-modify-path >"$SMOKE_ROOT/collision.log" 2>&1; then
+    printf '%s\n' 'installer replaced an unmanaged desktop path' >&2
+    exit 1
+fi
+grep -Fqx 'unmanaged sentinel' "$COLLISION_TARGET"
+grep -Fq 'desktop integration path is occupied' "$SMOKE_ROOT/collision.log"
 
 printf '%s\n' "Mocap Studio installer smoke passed on $(uname -s) $(uname -m)."

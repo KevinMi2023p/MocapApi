@@ -28,14 +28,30 @@ curl -fsSL https://raw.githubusercontent.com/KevinMi2023p/MocapApi/refs/heads/co
   | sh -s -- --version 0.1.0 --launch
 ```
 
-The default command location is `~/.local/bin`. When that directory is not
-already available, the installer adds an idempotent, clearly marked PATH block
-to the current user's zsh, Bash, fish, or POSIX shell startup files. Open a new
-terminal before running `mocap-studio`; the `--launch` shown above starts the
-first session immediately. Use `--no-modify-path` (or
+The installer also creates a graphical launcher that does not depend on the
+shell `PATH`:
+
+- On Linux, open the application drawer and search for **Mocap Studio**. The
+  installer writes an XDG desktop entry and an independently created SVG icon
+  under the current user's data directory.
+- On macOS, open `~/Applications/Mocap Studio.app` from Finder or Spotlight.
+  The per-user app bundle contains an `Info.plist` and launcher; it still uses
+  the Python 3 interpreter verified during installation.
+
+Both launchers use absolute paths and reopen the existing browser UI when the
+local service is already running. They do not copy or use Noitom artwork or
+branding. No logout is normally required, although some Linux desktop shells
+may take a few moments to refresh their app index.
+
+The terminal command remains available at `~/.local/bin`. When that directory
+is not already available, the installer adds an idempotent, clearly marked PATH
+block to the current user's zsh, Bash, fish, or POSIX shell startup files. Open
+a new terminal before running `mocap-studio`; the `--launch` shown above starts
+the first session immediately. Use `--no-modify-path` (or
 `MOCAP_STUDIO_NO_MODIFY_PATH=1`) to leave shell files unchanged, in which case
-the installer prints the full command path. Custom `--prefix` and `--bin-dir`
-locations are never added automatically.
+the installer prints the full command path. `--no-desktop-integration` skips
+the app-drawer entry or app bundle. Custom `--prefix` and `--bin-dir` locations
+are never added automatically.
 
 Application versions are stored under `~/.local/share/mocap-studio` on Linux and
 `~/Library/Application Support/Mocap Studio` on macOS. Takes use the platform's
@@ -56,16 +72,20 @@ Useful installer operations:
 ./install.sh --uninstall
 ```
 
-The uninstaller leaves the managed `~/.local/bin` PATH block in place because
-that standard per-user command directory may also contain unrelated tools.
+The uninstaller removes only the app entry, icon, app bundle, command link, and
+version directories bearing this installation's ownership markers. It refuses
+to overwrite or remove an unmanaged file at any of those paths, preserves all
+takes, and leaves the managed `~/.local/bin` PATH block in place because that
+standard per-user command directory may also contain unrelated tools.
 
 The remote installer detects `linux-x86_64`, `linux-aarch64`,
 `darwin-x86_64`, or `darwin-arm64`, downloads a versioned `.tar.gz` and its
 `.sha256`, verifies the checksum before extraction, rejects unsafe archive
 paths, refuses root/sudo use, and will not replace an unmanaged command or an
-existing version directory. `--prefix`, `--data-home`, and `--bin-dir` provide
-explicit location overrides. `--yes` is accepted only to confirm uninstall in
-a non-interactive shell.
+existing version directory. Desktop integration follows the same collision
+rule. `--prefix`, `--data-home`, and `--bin-dir` provide explicit location
+overrides. `--yes` is accepted only to confirm uninstall in a non-interactive
+shell.
 
 ## Configure Axis Studio
 
@@ -91,6 +111,12 @@ Only use motion networks you trust. The web service binds to loopback, rejects
 foreign Host headers, and exposes no cross-origin command API, but BVH packets
 themselves are not encrypted or authenticated.
 
+For the separate question of running Axis and its USB-attached transceiver on
+Linux, see [USB_ON_LINUX.md](docs/USB_ON_LINUX.md). The repository also contains
+a developer-only, network-disabled reference harness under
+`tools/wine-reference`; neither tool is part of release archives or a claim of
+hardware compatibility.
+
 ## Capability matrix
 
 | Capability | Demo | Standard BVH from Axis | Notes |
@@ -115,10 +141,14 @@ Demo responses prove the UI flow only; they never contact or calibrate hardware.
 cd studio/frontend
 npm ci
 npm test -- --passWithNoTests
+npx playwright install chromium
+npm run test:visual
 npm run build
 
 cd ../..
 PYTHONPATH=studio/backend python3 -m unittest discover -s studio/backend/tests -v
+python3 -m unittest studio/packaging/test_installer_archive.py -v
+python3 -m unittest studio/packaging/test_desktop_integration.py -v
 PYTHONPATH=studio/backend python3 -m mocap_studio
 ```
 
@@ -131,11 +161,11 @@ python3 studio/packaging/build_release.py \
 ```
 
 The builder has an explicit allow-list. It packages only the new backend,
-prebuilt static UI, launcher, README, Apache license, `NOTICE`, and generated
-third-party notices. It normalizes
-archive order, ownership, modes, timestamps, and gzip metadata, emits a SHA256
-file, and refuses to overwrite an asset. It never traverses the upstream
-`bin/`, `lib/`, `include/`, `demo/`, or `doc/` trees.
+prebuilt static UI, command/desktop launchers, original application icon,
+README, Apache license, `NOTICE`, and generated third-party notices. It
+normalizes archive order, ownership, modes, timestamps, and gzip metadata,
+emits a SHA256 file, and refuses to overwrite an asset. It never traverses the
+upstream `bin/`, `lib/`, `include/`, `demo/`, or `doc/` trees.
 
 For identical prebuilt UI/backend inputs and the same `SOURCE_DATE_EPOCH`, the
 archive assembly is byte-reproducible. CI's double-build check measures this
