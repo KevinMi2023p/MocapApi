@@ -25,8 +25,8 @@ Requirements are macOS or Linux, Python 3.10+, a modern browser, and `curl` for
 remote installation. Installation is per-user and never needs `sudo`.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/KevinMi2023p/MocapApi/refs/tags/studio-v0.2.1/install.sh \
-  | sh -s -- --version 0.2.1 --launch
+curl -fsSL https://raw.githubusercontent.com/KevinMi2023p/MocapApi/refs/tags/studio-v0.3.0/install.sh \
+  | sh -s -- --version 0.3.0 --launch
 ```
 
 For GitHub-hosted releases, the installer resolves the exact tagged assets
@@ -63,26 +63,79 @@ Application versions are stored under `~/.local/share/mocap-studio` on Linux and
 `~/Library/Application Support/Mocap Studio` on macOS. Takes use the platform's
 normal user-data directory and are never removed by the uninstaller.
 
-Useful installer operations:
+### Update
+
+Update an installed copy to the latest published release with:
+
+```sh
+mocap-studio update
+# Or update and start the new version immediately
+mocap-studio update --launch
+```
+
+The command downloads and verifies the latest archive, atomically switches the
+managed command link, and refreshes the same Linux app-drawer entry or macOS app
+bundle. It exits successfully without downloading an archive when the current
+version is already latest. Marked prior application versions remain available
+until uninstall so an already-running service is not disrupted; stop that
+service with **Ctrl+C** and launch Mocap Studio again to use the new version.
+Updating never removes local takes.
+
+If PATH setup was disabled, use the absolute command instead:
+
+```sh
+~/.local/bin/mocap-studio update
+```
+
+Custom command and application-data locations are derived from the installed
+command link. If the original installation used `--repo`,
+`--release-base-url`, or `--tag-prefix`, repeat those options after `update`.
+An installation created with `--no-desktop-integration` remains opted out.
+
+### Uninstall
+
+Remove the managed application files with an interactive confirmation:
+
+```sh
+mocap-studio uninstall
+```
+
+For automation only, confirmation may be supplied explicitly:
+
+```sh
+mocap-studio uninstall --yes
+```
+
+When PATH setup was disabled, use
+`~/.local/bin/mocap-studio uninstall`. Uninstall removes only ownership-marked
+version directories, the managed command link, and the Linux desktop entry/icon
+or macOS app bundle. It refuses to remove unmanaged paths and leaves the managed
+PATH block in place because `~/.local/bin` may contain unrelated tools.
+
+Recorded takes are always preserved at:
+
+- Linux: `${XDG_DATA_HOME:-$HOME/.local/share}/mocap-studio/takes`
+- macOS: `~/Library/Application Support/Mocap Studio/Takes`
+
+### Advanced installer operations
+
+From a repository checkout, the lower-level installer also supports:
 
 ```sh
 # Install a locally built checkout into a disposable/custom prefix
 ./install.sh --local . --prefix "$HOME/opt/mocap-studio" --launch
 
-# Override release hosting/repository
-./install.sh --repo KevinMi2023p/MocapApi --version 0.2.1
-./install.sh --release-base-url https://downloads.example.test/releases --version 0.2.1
-
-# Launch an existing installation, or uninstall with confirmation
-./install.sh --launch
+# Update or remove the default managed installation
+./install.sh --update
 ./install.sh --uninstall
-```
 
-The uninstaller removes only the app entry, icon, app bundle, command link, and
-version directories bearing this installation's ownership markers. It refuses
-to overwrite or remove an unmanaged file at any of those paths, preserves all
-takes, and leaves the managed `~/.local/bin` PATH block in place because that
-standard per-user command directory may also contain unrelated tools.
+# Override release hosting/repository
+./install.sh --repo KevinMi2023p/MocapApi --version 0.3.0
+./install.sh --release-base-url https://downloads.example.test/releases --version 0.3.0
+
+# Launch an existing installation
+./install.sh --launch
+```
 
 The remote installer detects `linux-x86_64`, `linux-aarch64`,
 `darwin-x86_64`, or `darwin-arm64`, downloads a versioned `.tar.gz` and its
@@ -154,7 +207,9 @@ npm run build
 cd ../..
 PYTHONPATH=studio/backend python3 -m unittest discover -s studio/backend/tests -v
 python3 -m unittest studio/packaging/test_installer_archive.py -v
+python3 -m unittest studio/packaging/test_installer_remote.py -v
 python3 -m unittest studio/packaging/test_desktop_integration.py -v
+studio/packaging/smoke_installer.sh
 PYTHONPATH=studio/backend python3 -m mocap_studio
 ```
 
@@ -163,7 +218,7 @@ library. For a deterministic release archive after building the UI:
 
 ```sh
 python3 studio/packaging/build_release.py \
-  --version 0.2.1 --target linux-x86_64 --output-dir dist
+  --version 0.3.0 --target linux-x86_64 --output-dir dist
 ```
 
 The builder has an explicit allow-list. It packages only the new backend,

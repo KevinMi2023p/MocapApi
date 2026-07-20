@@ -85,8 +85,20 @@ class SafeExtractorTests(unittest.TestCase):
             bin_dir = member(f"{ROOT_NAME}/bin", kind=tarfile.DIRTYPE, mode=0o755)
             bin_dir.size = 0
             launcher = member(f"{ROOT_NAME}/bin/mocap-studio", mode=0o755)
+            libexec_dir = member(f"{ROOT_NAME}/libexec", kind=tarfile.DIRTYPE, mode=0o755)
+            libexec_dir.size = 0
+            installer = member(f"{ROOT_NAME}/libexec/install.sh", mode=0o755)
             archive = work / "valid.tar.gz"
-            write_archive(archive, root_members() + [(bin_dir, b""), (launcher, b"x")])
+            write_archive(
+                archive,
+                root_members()
+                + [
+                    (bin_dir, b""),
+                    (launcher, b"x"),
+                    (libexec_dir, b""),
+                    (installer, b"y"),
+                ],
+            )
             destination = work / "out"
             destination.mkdir()
             result = self.run_extractor(archive, destination)
@@ -94,6 +106,9 @@ class SafeExtractorTests(unittest.TestCase):
             extracted = destination / ROOT_NAME / "bin" / "mocap-studio"
             self.assertEqual(extracted.read_bytes(), b"x")
             self.assertEqual(extracted.stat().st_mode & 0o7777, 0o755)
+            extracted_installer = destination / ROOT_NAME / "libexec" / "install.sh"
+            self.assertEqual(extracted_installer.read_bytes(), b"y")
+            self.assertEqual(extracted_installer.stat().st_mode & 0o7777, 0o755)
 
     def test_rejects_malicious_and_ambiguous_members_before_writing(self) -> None:
         cases: dict[str, list[tuple[tarfile.TarInfo, bytes]]] = {

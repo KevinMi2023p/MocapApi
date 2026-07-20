@@ -121,6 +121,7 @@ def payload_files(root: Path, version: str, target: str) -> list[PayloadFile]:
         "THIRD_PARTY_NOTICES.md": studio / "THIRD_PARTY_NOTICES.md",
         "backend/pyproject.toml": studio / "backend" / "pyproject.toml",
         "bin/mocap-studio": studio / "packaging" / "mocap-studio",
+        "libexec/install.sh": root / "install.sh",
         "desktop/mocap-studio.svg": studio / "packaging" / "desktop" / "mocap-studio.svg",
         "desktop/desktop_integration.py": studio
         / "packaging"
@@ -132,7 +133,11 @@ def payload_files(root: Path, version: str, target: str) -> list[PayloadFile]:
     require_regular_file(frontend_dist / "index.html")
 
     files = [
-        PayloadFile(path, PurePosixPath(destination), 0o755 if destination.startswith("bin/") else 0o644)
+        PayloadFile(
+            path,
+            PurePosixPath(destination),
+            0o755 if destination.startswith(("bin/", "libexec/")) else 0o644,
+        )
         for destination, path in required.items()
     ]
 

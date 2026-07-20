@@ -8,6 +8,7 @@ set -eu
 DEFAULT_REPOSITORY=KevinMi2023p/MocapApi
 DEFAULT_TAG_PREFIX=studio-v
 OPERATION=install
+OPERATION_EXPLICIT=0
 REQUESTED_VERSION=latest
 LOCAL_MODE=0
 LOCAL_ROOT=
@@ -23,6 +24,10 @@ MODIFY_PATH=1
 DESKTOP_INTEGRATION=1
 TEMP_DIR=
 INCOMING_DIR=
+COMMAND_LINK_TEMP=
+INSTALL_LOCK_DIR=
+INSTALL_LOCK_HELD=0
+LOCK_CREATED_APP_HOME=0
 VERSIONS_DIR=
 PATH_SETUP_RESULT=
 PATH_PROFILE_ATTEMPTS=0
@@ -34,6 +39,7 @@ Install Mocap Studio for the current user (never run this script with sudo).
 
 Usage:
   ./install.sh [--version VERSION] [--launch] [location options]
+  ./install.sh --update [--launch] [location options]
   ./install.sh --local [CHECKOUT] [--launch] [location options]
   ./install.sh --uninstall [--yes] [location options]
   ./install.sh --launch [location options]
@@ -48,6 +54,7 @@ Options:
   --release-base-url URL  Release download root; assets are under URL/TAG/.
   --tag-prefix PREFIX     Prefix for a bare version (default: studio-v).
   --launch                Launch after installation, or launch an existing install.
+  --update                Update a managed installation to the latest release.
   --no-modify-path        Do not add the default command directory to shell startup files.
   --no-desktop-integration
                           Do not install an app-drawer entry or macOS app bundle.
@@ -68,6 +75,25 @@ die() {
 
 warn() {
     printf 'install.sh: warning: %s\n' "$*" >&2
+}
+
+release_install_lock() {
+    [ "$INSTALL_LOCK_HELD" -eq 1 ] || return 0
+    LOCK_OWNER=
+    if [ -f "$INSTALL_LOCK_DIR/pid" ] && [ ! -L "$INSTALL_LOCK_DIR/pid" ]; then
+        LOCK_OWNER=$(sed -n '1p' "$INSTALL_LOCK_DIR/pid" 2>/dev/null || true)
+    fi
+    if [ "$LOCK_OWNER" = "$$" ]; then
+        rm -- "$INSTALL_LOCK_DIR/pid"
+        rmdir "$INSTALL_LOCK_DIR" 2>/dev/null \
+            || warn "installer lock directory could not be removed: $INSTALL_LOCK_DIR"
+    else
+        warn "installer lock ownership changed; preserving $INSTALL_LOCK_DIR"
+    fi
+    INSTALL_LOCK_HELD=0
+    if [ "$LOCK_CREATED_APP_HOME" -eq 1 ]; then
+        rmdir "$APP_HOME" 2>/dev/null || true
+    fi
 }
 
 github_release_value() {
@@ -127,6 +153,12 @@ cleanup() {
             "$VERSIONS_DIR"/.incoming.*) rm -rf -- "$INCOMING_DIR" ;;
         esac
     fi
+    if [ -n "$COMMAND_LINK_TEMP" ] && [ -L "$COMMAND_LINK_TEMP" ] && [ -n "$BIN_DIR" ]; then
+        case "$COMMAND_LINK_TEMP" in
+            "$BIN_DIR"/.mocap-studio-link.*) rm -- "$COMMAND_LINK_TEMP" ;;
+        esac
+    fi
+    release_install_lock
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
@@ -139,6 +171,12 @@ esac
 
 need_value() {
     [ "$#" -ge 2 ] || die "$1 requires a value"
+}
+
+select_operation() {
+    [ "$OPERATION_EXPLICIT" -eq 0 ] || die "only one of --update or --uninstall may be used"
+    OPERATION=$1
+    OPERATION_EXPLICIT=1
 }
 
 while [ "$#" -gt 0 ]; do
@@ -168,12 +206,20 @@ while [ "$#" -gt 0 ]; do
         --launch) LAUNCH=1; shift ;;
         --no-modify-path) MODIFY_PATH=0; shift ;;
         --no-desktop-integration) DESKTOP_INTEGRATION=0; shift ;;
-        --uninstall) OPERATION=uninstall; shift ;;
+        --update) select_operation update; shift ;;
+        --uninstall) select_operation uninstall; shift ;;
         --yes) ASSUME_YES=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1" ;;
     esac
 done
+
+[ "$ASSUME_YES" -eq 0 ] || [ "$OPERATION" = uninstall ] \
+    || die "--yes is accepted only with --uninstall"
+[ "$OPERATION" != update ] || [ "$LOCAL_MODE" -eq 0 ] \
+    || die "--update cannot be combined with --local"
+[ "$OPERATION" != update ] || [ "$REQUESTED_VERSION" = latest ] \
+    || die "--update always selects the latest release; do not combine it with --version"
 
 [ "$(id -u)" -ne 0 ] || die "do not run this per-user installer as root or with sudo"
 [ -n "${HOME:-}" ] || die "HOME is not set"
@@ -214,8 +260,55 @@ managed_command() {
     esac
 }
 
+managed_install() {
+    managed_command || return 1
+    MANAGED_INSTALL_DIR=${MANAGED_TARGET%/bin/mocap-studio}
+    case "$MANAGED_INSTALL_DIR" in
+        "$VERSIONS_DIR"/mocap-studio-*) ;;
+        *) return 1 ;;
+    esac
+    [ -f "$MANAGED_INSTALL_DIR/.mocap-studio-bundle" ] || return 1
+    [ -f "$MANAGED_INSTALL_DIR/VERSION" ] || return 1
+    MANAGED_VERSION=$(sed -n '1p' "$MANAGED_INSTALL_DIR/VERSION")
+    case "$MANAGED_VERSION" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+    grep -Fqx "version=$MANAGED_VERSION" "$MANAGED_INSTALL_DIR/.mocap-studio-bundle" \
+        || return 1
+}
+
+try_reclaim_stale_install_lock() {
+    [ -d "$INSTALL_LOCK_DIR" ] && [ ! -L "$INSTALL_LOCK_DIR" ] || return 1
+    [ -f "$INSTALL_LOCK_DIR/pid" ] && [ ! -L "$INSTALL_LOCK_DIR/pid" ] || return 1
+    STALE_LOCK_PID=$(sed -n '1p' "$INSTALL_LOCK_DIR/pid" 2>/dev/null || true)
+    case "$STALE_LOCK_PID" in ''|0|*[!0-9]*) return 1 ;; esac
+    kill -0 "$STALE_LOCK_PID" 2>/dev/null && return 1
+    rm -- "$INSTALL_LOCK_DIR/pid" 2>/dev/null || return 1
+    rmdir "$INSTALL_LOCK_DIR" 2>/dev/null || return 1
+}
+
+acquire_install_lock() {
+    if [ ! -d "$APP_HOME" ]; then
+        [ ! -e "$APP_HOME" ] && [ ! -L "$APP_HOME" ] \
+            || die "application data path is not a directory: $APP_HOME"
+        mkdir -p "$APP_HOME" || die "could not create application data directory $APP_HOME"
+        LOCK_CREATED_APP_HOME=1
+    fi
+    INSTALL_LOCK_DIR=$APP_HOME/.mocap-studio-installer-lock
+    if ! mkdir "$INSTALL_LOCK_DIR" 2>/dev/null; then
+        if ! try_reclaim_stale_install_lock \
+            || ! mkdir "$INSTALL_LOCK_DIR" 2>/dev/null; then
+            die "another install, update, or uninstall is already using $APP_HOME (lock: $INSTALL_LOCK_DIR)"
+        fi
+    fi
+    if ! printf '%s\n' "$$" >"$INSTALL_LOCK_DIR/pid"; then
+        rmdir "$INSTALL_LOCK_DIR" 2>/dev/null || true
+        die "could not record installer lock ownership in $INSTALL_LOCK_DIR"
+    fi
+    INSTALL_LOCK_HELD=1
+}
+
 launch_installed() {
     [ -x "$COMMAND_PATH" ] || die "no runnable install found at $COMMAND_PATH"
+    cleanup
     trap - EXIT HUP INT TERM
     exec "$COMMAND_PATH" --reuse-existing
 }
@@ -382,6 +475,13 @@ configure_command_path() {
     fi
 }
 
+acquire_install_lock
+
+if [ "$OPERATION" = update ]; then
+    managed_install || die "no managed Mocap Studio installation was found at $COMMAND_PATH"
+    UPDATE_FROM_VERSION=$MANAGED_VERSION
+fi
+
 if [ "$OPERATION" = uninstall ]; then
     FOUND=0
     DESKTOP_HELPER=
@@ -436,7 +536,8 @@ if [ "$OPERATION" = uninstall ]; then
     exit 0
 fi
 
-if [ "$LAUNCH" -eq 1 ] && [ "$LOCAL_MODE" -eq 0 ] && [ "$REQUESTED_VERSION" = latest ] && [ -x "$COMMAND_PATH" ]; then
+if [ "$OPERATION" = install ] && [ "$LAUNCH" -eq 1 ] && [ "$LOCAL_MODE" -eq 0 ] \
+    && [ "$REQUESTED_VERSION" = latest ] && [ -x "$COMMAND_PATH" ]; then
     configure_command_path
     launch_installed
 fi
@@ -502,6 +603,13 @@ else
         *) VERSION=$RELEASE_TAG ;;
     esac
     case "$VERSION" in ''|*[!A-Za-z0-9._-]*) die "unsafe release version: $VERSION" ;; esac
+    if [ "$OPERATION" = update ] && [ "$VERSION" = "$UPDATE_FROM_VERSION" ]; then
+        printf 'Mocap Studio %s is already up to date.\n' "$VERSION"
+        if [ "$LAUNCH" -eq 1 ]; then
+            launch_installed
+        fi
+        exit 0
+    fi
     ASSET=mocap-studio-$VERSION-$TARGET.tar.gz
     if [ -z "$RELEASE_BASE_URL" ]; then
         if [ -z "$GITHUB_RELEASE_JSON" ]; then
@@ -599,7 +707,10 @@ try:
         validated: dict[str, tuple[tarfile.TarInfo, tuple[str, ...], str]] = {}
         member_count = 0
         total_size = 0
-        launcher_name = f"{expected_root}/bin/mocap-studio"
+        executable_names = {
+            f"{expected_root}/bin/mocap-studio",
+            f"{expected_root}/libexec/install.sh",
+        }
         for member in bundle:
             member_count += 1
             if member_count > max_members:
@@ -618,7 +729,7 @@ try:
                     fail(f"unsafe directory metadata for {name}")
                 kind = "directory"
             elif member.type in {tarfile.REGTYPE, tarfile.AREGTYPE}:
-                expected_mode = 0o755 if name == launcher_name else 0o644
+                expected_mode = 0o755 if name in executable_names else 0o644
                 if (member.mode & 0o7777) != expected_mode:
                     fail(f"unsafe file mode for {name}")
                 if member.size < 0 or member.size > max_file_size:
@@ -665,7 +776,7 @@ try:
                 shutil.copyfileobj(source, stream, length=1024 * 1024)
             if output.stat().st_size != member.size:
                 fail(f"archive file size changed while reading {member.name!r}")
-            os.chmod(output, 0o755 if member.name == launcher_name else 0o644)
+            os.chmod(output, 0o755 if member.name in executable_names else 0o644)
 except (OSError, tarfile.TarError, ValueError) as error:
     print(f"install.sh: unsafe or invalid release archive: {error}", file=sys.stderr)
     raise SystemExit(1) from error
@@ -675,6 +786,7 @@ PAYLOAD=$TEMP_DIR/$PAYLOAD_ROOT
 grep -Fqx "version=$VERSION" "$PAYLOAD/.mocap-studio-bundle" || die "release bundle version does not match"
 grep -Fqx "target=$TARGET" "$PAYLOAD/.mocap-studio-bundle" || die "release bundle target does not match"
 [ -x "$PAYLOAD/bin/mocap-studio" ] || die "release launcher is missing"
+[ -x "$PAYLOAD/libexec/install.sh" ] || die "release management helper is missing"
 [ -f "$PAYLOAD/backend/mocap_studio/static/index.html" ] || die "release UI is missing"
 [ -f "$PAYLOAD/desktop/desktop_integration.py" ] || die "desktop integration helper is missing"
 [ -f "$PAYLOAD/desktop/mocap-studio.svg" ] || die "desktop application icon is missing"
@@ -694,12 +806,47 @@ mkdir -p "$VERSIONS_DIR" "$BIN_DIR"
 INCOMING_DIR=$VERSIONS_DIR/.incoming.$$
 [ ! -e "$INCOMING_DIR" ] || die "temporary install path already exists: $INCOMING_DIR"
 cp -R "$PAYLOAD" "$INCOMING_DIR"
-mv "$INCOMING_DIR" "$INSTALL_DIR"
+python3 - "$INCOMING_DIR" "$INSTALL_DIR" <<'ATOMIC_INSTALL_PY' \
+    || die "another installer created $INSTALL_DIR before this install completed"
+import os
+import sys
+
+os.rename(sys.argv[1], sys.argv[2])
+ATOMIC_INSTALL_PY
 INCOMING_DIR=
-if managed_command; then
-    rm -- "$COMMAND_PATH"
-fi
-ln -s "$INSTALL_DIR/bin/mocap-studio" "$COMMAND_PATH" || die "could not create command link at $COMMAND_PATH"
+COMMAND_LINK_TEMP=$BIN_DIR/.mocap-studio-link.$$
+[ ! -e "$COMMAND_LINK_TEMP" ] && [ ! -L "$COMMAND_LINK_TEMP" ] \
+    || die "temporary command link already exists: $COMMAND_LINK_TEMP"
+ln -s "$INSTALL_DIR/bin/mocap-studio" "$COMMAND_LINK_TEMP" \
+    || die "could not stage command link at $COMMAND_LINK_TEMP"
+python3 - "$COMMAND_LINK_TEMP" "$COMMAND_PATH" "$VERSIONS_DIR" <<'ATOMIC_LINK_PY' \
+    || die "could not activate command link at $COMMAND_PATH"
+import os
+from pathlib import Path
+import stat
+import sys
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+versions = Path(os.path.abspath(sys.argv[3]))
+if os.path.lexists(destination):
+    metadata = os.lstat(destination)
+    if not stat.S_ISLNK(metadata.st_mode):
+        raise RuntimeError(f"refusing to replace non-symlink command path {destination}")
+    target = Path(os.readlink(destination))
+    if not target.is_absolute():
+        target = destination.parent / target
+    target = Path(os.path.abspath(target))
+    try:
+        relative = target.relative_to(versions)
+    except ValueError as error:
+        raise RuntimeError(f"refusing to replace unmanaged command link {destination}") from error
+    if len(relative.parts) != 3 or not relative.parts[0].startswith("mocap-studio-") \
+            or relative.parts[1:] != ("bin", "mocap-studio"):
+        raise RuntimeError(f"refusing to replace unmanaged command link {destination}")
+os.replace(source, destination)
+ATOMIC_LINK_PY
+COMMAND_LINK_TEMP=
 
 if [ "$DESKTOP_INTEGRATION" -eq 1 ]; then
     run_desktop_helper install "$INSTALL_DIR/desktop/desktop_integration.py" "$INSTALL_DIR" "$PYTHON_PATH" \
@@ -708,7 +855,11 @@ fi
 
 configure_command_path
 
-printf 'Installed Mocap Studio %s for %s.\n' "$VERSION" "$TARGET"
+if [ "$OPERATION" = update ]; then
+    printf 'Updated Mocap Studio from %s to %s for %s.\n' "$UPDATE_FROM_VERSION" "$VERSION" "$TARGET"
+else
+    printf 'Installed Mocap Studio %s for %s.\n' "$VERSION" "$TARGET"
+fi
 printf 'Command: %s\n' "$COMMAND_PATH"
 if [ "$DESKTOP_INTEGRATION" -eq 0 ]; then
     printf '%s\n' 'Desktop integration was disabled.'

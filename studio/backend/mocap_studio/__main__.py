@@ -20,6 +20,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mocap-studio",
         description="Launch the local Mocap Studio operator console.",
+        epilog=(
+            "Management commands: 'mocap-studio update' installs the latest release; "
+            "'mocap-studio uninstall' removes managed application files and preserves takes."
+        ),
     )
     parser.add_argument("--port", type=int, default=8765, help="loopback HTTP port (default: 8765)")
     parser.add_argument("--no-browser", action="store_true", help="do not open the UI in a browser")

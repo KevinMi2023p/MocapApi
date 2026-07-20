@@ -4,7 +4,23 @@
 
 set -eu
 
-PROGRAM=$0
+COMMAND_ENTRY=$0
+case "$COMMAND_ENTRY" in
+    /*) ;;
+    */*)
+        COMMAND_ENTRY_DIR=$(CDPATH= cd -P "$(dirname "$COMMAND_ENTRY")" 2>/dev/null && pwd)
+        COMMAND_ENTRY=$COMMAND_ENTRY_DIR/$(basename "$COMMAND_ENTRY")
+        ;;
+    *)
+        LOCATED_ENTRY=$(command -v "$COMMAND_ENTRY" 2>/dev/null || true)
+        case "$LOCATED_ENTRY" in
+            /*) COMMAND_ENTRY=$LOCATED_ENTRY ;;
+            *) COMMAND_ENTRY= ;;
+        esac
+        ;;
+esac
+
+PROGRAM=${COMMAND_ENTRY:-$0}
 while [ -h "$PROGRAM" ]; do
     PROGRAM_DIR=$(CDPATH= cd -P "$(dirname "$PROGRAM")" 2>/dev/null && pwd)
     LINK_TARGET=$(readlink "$PROGRAM")
@@ -17,6 +33,62 @@ done
 PROGRAM_DIR=$(CDPATH= cd -P "$(dirname "$PROGRAM")" 2>/dev/null && pwd)
 APP_DIR=$(CDPATH= cd -P "$PROGRAM_DIR/.." 2>/dev/null && pwd)
 PYTHON_BIN=${MOCAP_STUDIO_PYTHON:-python3}
+
+run_management_command() {
+    MANAGEMENT_OPERATION=$1
+    shift
+    [ -n "$COMMAND_ENTRY" ] && [ -L "$COMMAND_ENTRY" ] || {
+        printf '%s\n' \
+            "mocap-studio: $MANAGEMENT_OPERATION must be run through the installed command link." >&2
+        exit 1
+    }
+    INSTALLED_TARGET=$(readlink "$COMMAND_ENTRY")
+    case "$INSTALLED_TARGET" in
+        /*/versions/mocap-studio-*/bin/mocap-studio) ;;
+        *)
+            printf '%s\n' "mocap-studio: the installed command link is invalid." >&2
+            exit 1
+            ;;
+    esac
+    INSTALL_DIR=${INSTALLED_TARGET%/bin/mocap-studio}
+    INSTALLER=$INSTALL_DIR/libexec/install.sh
+    [ -x "$INSTALLER" ] || {
+        printf '%s\n' "mocap-studio: the installed management helper is missing." >&2
+        exit 1
+    }
+    INSTALL_VERSIONS_DIR=${INSTALL_DIR%/*}
+    [ "$(basename "$INSTALL_VERSIONS_DIR")" = versions ] || {
+        printf '%s\n' "mocap-studio: the installed application layout is invalid." >&2
+        exit 1
+    }
+    INSTALL_APP_HOME=${INSTALL_VERSIONS_DIR%/versions}
+    COMMAND_BIN_DIR=$(dirname "$COMMAND_ENTRY")
+    case "$INSTALL_APP_HOME:$COMMAND_BIN_DIR" in
+        /*:/*) ;;
+        *)
+            printf '%s\n' "mocap-studio: the installed application layout is invalid." >&2
+            exit 1
+            ;;
+    esac
+    if [ "$MANAGEMENT_OPERATION" = update ]; then
+        INTEGRATION_STATE=$INSTALL_APP_HOME/desktop/.mocap-studio-integration.json
+        if [ ! -e "$INTEGRATION_STATE" ] && [ ! -L "$INTEGRATION_STATE" ]; then
+            set -- "$@" --no-desktop-integration
+        fi
+    fi
+    exec "$INSTALLER" "--$MANAGEMENT_OPERATION" "$@" \
+        --data-home "$INSTALL_APP_HOME" \
+        --bin-dir "$COMMAND_BIN_DIR" \
+        --no-modify-path
+}
+
+case ${1-} in
+    update|uninstall)
+        MANAGEMENT_OPERATION=$1
+        shift
+        run_management_command "$MANAGEMENT_OPERATION" "$@"
+        ;;
+esac
 
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
     printf '%s\n' "mocap-studio: Python 3.10 or newer is required." >&2

@@ -126,8 +126,8 @@ curl -fsS "http://127.0.0.1:$PORT/" | grep -Fq '<title>Mocap Studio</title>'
 kill "$SERVER_PID"
 wait "$SERVER_PID" || true
 SERVER_PID=
-./install.sh --uninstall --yes
-[ ! -e "$SMOKE_BIN/mocap-studio" ]
+"$SMOKE_BIN/mocap-studio" uninstall --yes
+[ ! -e "$SMOKE_BIN/mocap-studio" ] && [ ! -L "$SMOKE_BIN/mocap-studio" ]
 [ ! -e "$APP_LAUNCHER" ]
 if [ "$(uname -s)" = Darwin ]; then
     [ ! -e "$APP_BUNDLE" ]

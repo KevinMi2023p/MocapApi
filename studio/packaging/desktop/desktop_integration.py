@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import plistlib
 import shlex
@@ -22,6 +23,8 @@ LINUX_FILENAME = f"{APPLICATION_ID}.desktop"
 ICON_FILENAME = f"{APPLICATION_ID}.svg"
 APP_BUNDLE_NAME = "Mocap Studio.app"
 FORMAT = "mocap-studio-desktop-v1"
+STATE_FILENAME = ".mocap-studio-integration.json"
+STATE_FORMAT = "mocap-studio-integration-v1"
 
 
 class DesktopIntegrationError(RuntimeError):
@@ -35,6 +38,8 @@ class IntegrationPaths:
     install_dir: Path
     python: Path
     owner: str
+    location_root: Path
+    state_file: Path
     launcher: Path
     entry: Path | None = None
     icon: Path | None = None
@@ -63,8 +68,12 @@ def integration_paths(args: argparse.Namespace) -> IntegrationPaths:
     python = absolute_path(args.python, "Python interpreter")
     owner = owner_for(app_home)
     launcher = app_home / "desktop" / "mocap-studio"
+    state_file = app_home / "desktop" / STATE_FILENAME
+    saved_location = load_saved_location(state_file, owner, args.platform)
     if args.platform == "linux":
-        if args.xdg_data_home and Path(args.xdg_data_home).is_absolute():
+        if saved_location is not None:
+            data_home = saved_location
+        elif args.xdg_data_home and Path(args.xdg_data_home).is_absolute():
             data_home = absolute_path(args.xdg_data_home, "XDG data home")
         else:
             data_home = home / ".local" / "share"
@@ -74,23 +83,51 @@ def integration_paths(args: argparse.Namespace) -> IntegrationPaths:
             install_dir=install_dir,
             python=python,
             owner=owner,
+            location_root=data_home,
+            state_file=state_file,
             launcher=launcher,
             entry=data_home / "applications" / LINUX_FILENAME,
             icon=data_home / "icons" / "hicolor" / "scalable" / "apps" / ICON_FILENAME,
         )
+    bundle_home = saved_location or home
     return IntegrationPaths(
         platform=args.platform,
         app_home=app_home,
         install_dir=install_dir,
         python=python,
         owner=owner,
+        location_root=bundle_home,
+        state_file=state_file,
         launcher=launcher,
-        bundle=home / "Applications" / APP_BUNDLE_NAME,
+        bundle=bundle_home / "Applications" / APP_BUNDLE_NAME,
     )
 
 
 def lexists(path: Path) -> bool:
     return os.path.lexists(path)
+
+
+def load_saved_location(state_file: Path, owner: str, platform: str) -> Path | None:
+    if not lexists(state_file):
+        return None
+    if state_file.is_symlink() or not state_file.is_file():
+        raise DesktopIntegrationError(
+            f"integration state is not a regular file: {state_file}"
+        )
+    if state_file.stat().st_size > 16 * 1024:
+        raise DesktopIntegrationError(f"integration state is too large: {state_file}")
+    payload = json.loads(state_file.read_text(encoding="utf-8"))
+    expected_keys = {"format", "owner", "platform", "location_root"}
+    if not isinstance(payload, dict) or set(payload) != expected_keys:
+        raise DesktopIntegrationError(f"integration state is invalid: {state_file}")
+    if (
+        payload["format"] != STATE_FORMAT
+        or payload["owner"] != owner
+        or payload["platform"] != platform
+        or not isinstance(payload["location_root"], str)
+    ):
+        raise DesktopIntegrationError(f"integration state is not owned here: {state_file}")
+    return absolute_path(payload["location_root"], "saved integration location")
 
 
 def owned_regular_file(path: Path, owner: str, marker: str) -> bool:
@@ -215,6 +252,19 @@ def atomic_write(path: Path, content: str, mode: int) -> None:
             temporary_path.unlink()
 
 
+def write_state(paths: IntegrationPaths) -> None:
+    content = json.dumps(
+        {
+            "format": STATE_FORMAT,
+            "location_root": str(paths.location_root),
+            "owner": paths.owner,
+            "platform": paths.platform,
+        },
+        sort_keys=True,
+    )
+    atomic_write(paths.state_file, content + "\n", 0o644)
+
+
 def install_linux(paths: IntegrationPaths) -> None:
     assert paths.entry is not None and paths.icon is not None
     atomic_write(paths.launcher, launcher_text(paths), 0o755)
@@ -291,40 +341,56 @@ def install(paths: IntegrationPaths, version: str) -> None:
         install_linux(paths)
     else:
         install_macos(paths, version)
+    write_state(paths)
 
 
-def remove_if_owned(path: Path, owner: str, marker: str) -> None:
+def remove_if_owned(path: Path, owner: str, marker: str) -> bool:
     if not lexists(path):
-        return
+        return True
     if owned_regular_file(path, owner, marker):
         path.unlink()
+        return True
     else:
         print(f"desktop integration: preserving unmanaged path {path}", file=sys.stderr)
+        return False
 
 
 def uninstall(paths: IntegrationPaths) -> None:
     if paths.platform == "linux":
         assert paths.entry is not None and paths.icon is not None
-        remove_if_owned(paths.entry, paths.owner, "X-Mocap-Studio-Managed=true")
-        remove_if_owned(paths.icon, paths.owner, "mocap-studio installer-managed icon")
-        remove_if_owned(
-            paths.launcher, paths.owner, "# mocap-studio installer-managed launcher"
+        removed = (
+            remove_if_owned(paths.entry, paths.owner, "X-Mocap-Studio-Managed=true")
+            & remove_if_owned(paths.icon, paths.owner, "mocap-studio installer-managed icon")
+            & remove_if_owned(
+                paths.launcher,
+                paths.owner,
+                "# mocap-studio installer-managed launcher",
+            )
         )
-        try:
-            paths.launcher.parent.rmdir()
-        except OSError:
-            pass
+        if removed:
+            if lexists(paths.state_file):
+                paths.state_file.unlink()
+            try:
+                paths.launcher.parent.rmdir()
+            except OSError:
+                pass
         return
     assert paths.bundle is not None
-    if not lexists(paths.bundle):
-        return
-    if owned_bundle(paths.bundle, paths.owner):
+    removed = not lexists(paths.bundle)
+    if not removed and owned_bundle(paths.bundle, paths.owner):
         shutil.rmtree(paths.bundle)
-    else:
+        removed = True
+    elif not removed:
         print(
             f"desktop integration: preserving unmanaged application {paths.bundle}",
             file=sys.stderr,
         )
+    if removed and lexists(paths.state_file):
+        paths.state_file.unlink()
+        try:
+            paths.state_file.parent.rmdir()
+        except OSError:
+            pass
 
 
 def parser() -> argparse.ArgumentParser:

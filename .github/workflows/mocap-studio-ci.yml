@@ -102,6 +102,7 @@ jobs:
           tar -tzf "dist-a/mocap-studio-$version-${{ matrix.target }}.tar.gz" > archive.list
           ! grep -E '/(bin/(linux|win32|android)|lib/|include/|demo/|doc/)' archive.list
           grep -q '/backend/mocap_studio/static/index.html$' archive.list
+          grep -q '/libexec/install.sh$' archive.list
           grep -q '/desktop/desktop_integration.py$' archive.list
           grep -q '/desktop/mocap-studio.svg$' archive.list
 
