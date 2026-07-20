@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import {
   GizmoHelper,
@@ -20,8 +20,11 @@ import {
 } from "lucide-react";
 import type { PerspectiveCamera as PerspectiveCameraType } from "three";
 import type { Avatar, Joint, Sensor } from "../types";
+import "./SkeletonViewport.css";
 
 export type CameraView = "perspective" | "front" | "right";
+export type ViewportLayout = 1 | 2 | 3 | 4;
+type PanelCameraView = CameraView | "top";
 
 interface SkeletonViewportProps {
   avatar?: Avatar;
@@ -43,17 +46,32 @@ interface SkeletonViewportProps {
   onJointSelect: (joint: Joint) => void;
 }
 
-const CAMERA_POSITIONS: Record<CameraView, [number, number, number]> = {
+const CAMERA_POSITIONS: Record<PanelCameraView, [number, number, number]> = {
   perspective: [2.7, 1.75, 3.4],
   front: [0, 1.25, 4.2],
   right: [4.2, 1.25, 0],
+  top: [0, 5.2, 0],
 };
+
+const CAMERA_LABELS: Record<PanelCameraView, string> = {
+  perspective: "Perspective",
+  front: "Front",
+  right: "Right",
+  top: "Top",
+};
+
+const VIEWPORT_LAYOUTS: ViewportLayout[] = [1, 2, 3, 4];
+
+function panelCameraViews(layout: ViewportLayout, primary: CameraView): PanelCameraView[] {
+  const supplemental: PanelCameraView[] = ["front", "right", "top", "perspective"];
+  return [primary, ...supplemental.filter((view) => view !== primary)].slice(0, layout);
+}
 
 function CameraController({
   view,
   revision,
 }: {
-  view: CameraView;
+  view: PanelCameraView;
   revision: number;
 }) {
   const camera = useRef<PerspectiveCameraType>(null);
@@ -61,6 +79,7 @@ function CameraController({
   useEffect(() => {
     if (!camera.current) return;
     camera.current.position.set(...CAMERA_POSITIONS[view]);
+    camera.current.up.set(0, view === "top" ? 0 : 1, view === "top" ? -1 : 0);
     camera.current.lookAt(0, 1, 0);
     camera.current.updateProjectionMatrix();
   }, [revision, view]);
@@ -73,7 +92,16 @@ function CameraController({
       near={0.05}
       far={80}
       position={CAMERA_POSITIONS[view]}
+      up={view === "top" ? [0, 0, -1] : [0, 1, 0]}
     />
+  );
+}
+
+function LayoutGlyph({ panels }: { panels: ViewportLayout }) {
+  return (
+    <span className={`viewport-layout-glyph layout-${panels}`} aria-hidden="true">
+      {Array.from({ length: panels }, (_, index) => <i key={index} />)}
+    </span>
   );
 }
 
@@ -213,13 +241,135 @@ function ViewButton({
   );
 }
 
-export function SkeletonViewport(props: SkeletonViewportProps) {
+function MotionCanvas({
+  props,
+  view,
+  showCameraLabel,
+  showHint,
+}: {
+  props: SkeletonViewportProps;
+  view: PanelCameraView;
+  showCameraLabel: boolean;
+  showHint: boolean;
+}) {
   const selectedJoint = props.avatar?.joints.find((joint) => joint.id === props.selectedJointId);
+  const cameraLabel = CAMERA_LABELS[view];
+
+  return (
+    <div
+      className="viewport-canvas"
+      role="img"
+      aria-label={showCameraLabel
+        ? `${cameraLabel} interactive 3D skeleton viewport`
+        : "Interactive 3D skeleton viewport"}
+      data-camera-view={view}
+    >
+      <Canvas dpr={[1, 1.75]} gl={{ antialias: true }}>
+        <color attach="background" args={["#252a31"]} />
+        <fog attach="fog" args={["#252a31", 4.5, 9]} />
+        <CameraController view={view} revision={props.cameraRevision} />
+        <ambientLight intensity={1.35} />
+        <directionalLight position={[3, 5, 4]} intensity={2.2} color="#d9efff" />
+        <directionalLight position={[-4, 2, -2]} intensity={0.7} color="#69b8f4" />
+        <Grid
+          args={[14, 14]}
+          position={[0, 0, 0]}
+          cellSize={0.25}
+          cellThickness={0.35}
+          cellColor="#4a5059"
+          sectionSize={1}
+          sectionThickness={0.7}
+          sectionColor="#68717d"
+          fadeDistance={8}
+          fadeStrength={1.6}
+          infiniteGrid
+        />
+        <SkeletonModel
+          avatar={props.avatar}
+          sensors={props.sensors}
+          selectedJointId={props.selectedJointId}
+          selectedSensorId={props.selectedSensorId}
+          showSensors={props.showSensors}
+          onJointSelect={props.onJointSelect}
+        />
+        <OrbitControls
+          makeDefault
+          target={[0, props.followActor ? 1.05 : 0.95, 0]}
+          minDistance={1.1}
+          maxDistance={10}
+          minPolarAngle={0.1}
+          maxPolarAngle={Math.PI / 2.01}
+          enableDamping
+          dampingFactor={0.08}
+        />
+        <GizmoHelper alignment="bottom-left" margin={[58, 48]}>
+          <GizmoViewport
+            axisColors={["#d65555", "#55bb76", "#4e83d1"]}
+            labelColor="#dce2e8"
+          />
+        </GizmoHelper>
+      </Canvas>
+
+      {showCameraLabel ? (
+        <span className="viewport-camera-label" aria-hidden="true">{cameraLabel}</span>
+      ) : null}
+      {props.showLabels && props.avatar ? (
+        <div className="avatar-label" aria-hidden="true">
+          <span className={`avatar-label-dot${props.preview ? " preview" : ""}`} />
+          {props.avatar.name}
+        </div>
+      ) : null}
+      {selectedJoint ? (
+        <div className="selection-chip" aria-live="polite">
+          <Crosshair size={12} />
+          {selectedJoint.name}
+        </div>
+      ) : null}
+      {showHint ? (
+        <div className="viewport-hint">Drag to orbit · Shift-drag to pan · Scroll to zoom</div>
+      ) : null}
+    </div>
+  );
+}
+
+export function SkeletonViewport(props: SkeletonViewportProps) {
+  const [layout, setLayout] = useState<ViewportLayout>(1);
+  const cameraViews = panelCameraViews(layout, props.cameraView);
 
   return (
     <section className="viewport-panel" aria-label="3D motion preview">
       <div className="viewport-toolbar">
         <div className="viewport-toolbar-group" aria-label="Camera views">
+          <div className="viewport-layout-selector" role="group" aria-label="Viewport layout">
+            {VIEWPORT_LAYOUTS.map((panelCount) => (
+              <button
+                key={panelCount}
+                type="button"
+                className={`viewport-icon-button viewport-layout-button${layout === panelCount ? " active" : ""}`}
+                aria-label={`${panelCount}-panel layout`}
+                aria-pressed={layout === panelCount}
+                title={`${panelCount}-panel layout`}
+                onClick={() => setLayout(panelCount)}
+              >
+                <LayoutGlyph panels={panelCount} />
+              </button>
+            ))}
+          </div>
+          <ViewButton
+            label="Follow performer"
+            active={props.followActor}
+            onClick={() => props.onFollowActorChange(!props.followActor)}
+          >
+            <Crosshair size={14} />
+          </ViewButton>
+          <ViewButton
+            label={props.showLabels ? "Hide labels" : "Show labels"}
+            active={props.showLabels}
+            onClick={() => props.onShowLabelsChange(!props.showLabels)}
+          >
+            {props.showLabels ? <Eye size={14} /> : <EyeOff size={14} />}
+          </ViewButton>
+          <span className="toolbar-divider" />
           <ViewButton
             label="Perspective view"
             active={props.cameraView === "perspective"}
@@ -241,23 +391,8 @@ export function SkeletonViewport(props: SkeletonViewportProps) {
           >
             <Move3d size={14} />
           </ViewButton>
-          <span className="toolbar-divider" />
           <ViewButton label="Reset camera" onClick={props.onResetCamera}>
             <Focus size={14} />
-          </ViewButton>
-          <ViewButton
-            label="Follow performer"
-            active={props.followActor}
-            onClick={() => props.onFollowActorChange(!props.followActor)}
-          >
-            <Crosshair size={14} />
-          </ViewButton>
-          <ViewButton
-            label={props.showLabels ? "Hide labels" : "Show labels"}
-            active={props.showLabels}
-            onClick={() => props.onShowLabelsChange(!props.showLabels)}
-          >
-            {props.showLabels ? <Eye size={14} /> : <EyeOff size={14} />}
           </ViewButton>
           <ViewButton
             label={props.showSensors ? "Hide sensor markers" : "Show sensor markers"}
@@ -276,66 +411,21 @@ export function SkeletonViewport(props: SkeletonViewportProps) {
         </div>
       </div>
 
-      <div className="viewport-canvas" role="img" aria-label="Interactive 3D skeleton viewport">
-        <Canvas dpr={[1, 1.75]} gl={{ antialias: true }}>
-          <color attach="background" args={["#252a31"]} />
-          <fog attach="fog" args={["#252a31", 4.5, 9]} />
-          <CameraController view={props.cameraView} revision={props.cameraRevision} />
-          <ambientLight intensity={1.35} />
-          <directionalLight position={[3, 5, 4]} intensity={2.2} color="#d9efff" />
-          <directionalLight position={[-4, 2, -2]} intensity={0.7} color="#69b8f4" />
-          <Grid
-            args={[14, 14]}
-            position={[0, 0, 0]}
-            cellSize={0.25}
-            cellThickness={0.35}
-            cellColor="#4a5059"
-            sectionSize={1}
-            sectionThickness={0.7}
-            sectionColor="#68717d"
-            fadeDistance={8}
-            fadeStrength={1.6}
-            infiniteGrid
+      <div
+        className="viewport-layout"
+        data-layout={layout}
+        role="group"
+        aria-label={`${layout}-panel viewport layout`}
+      >
+        {cameraViews.map((view, index) => (
+          <MotionCanvas
+            key={`${index}-${view}`}
+            props={props}
+            view={view}
+            showCameraLabel={layout > 1}
+            showHint={index === 0}
           />
-          <SkeletonModel
-            avatar={props.avatar}
-            sensors={props.sensors}
-            selectedJointId={props.selectedJointId}
-            selectedSensorId={props.selectedSensorId}
-            showSensors={props.showSensors}
-            onJointSelect={props.onJointSelect}
-          />
-          <OrbitControls
-            makeDefault
-            target={[0, props.followActor ? 1.05 : 0.95, 0]}
-            minDistance={1.1}
-            maxDistance={10}
-            minPolarAngle={0.1}
-            maxPolarAngle={Math.PI / 2.01}
-            enableDamping
-            dampingFactor={0.08}
-          />
-          <GizmoHelper alignment="bottom-left" margin={[58, 48]}>
-            <GizmoViewport
-              axisColors={["#d65555", "#55bb76", "#4e83d1"]}
-              labelColor="#dce2e8"
-            />
-          </GizmoHelper>
-        </Canvas>
-
-        {props.showLabels && props.avatar ? (
-          <div className="avatar-label" aria-hidden="true">
-            <span className={`avatar-label-dot${props.preview ? " preview" : ""}`} />
-            {props.avatar.name}
-          </div>
-        ) : null}
-        {selectedJoint ? (
-          <div className="selection-chip" aria-live="polite">
-            <Crosshair size={12} />
-            {selectedJoint.name}
-          </div>
-        ) : null}
-        <div className="viewport-hint">Drag to orbit · Shift-drag to pan · Scroll to zoom</div>
+        ))}
       </div>
     </section>
   );

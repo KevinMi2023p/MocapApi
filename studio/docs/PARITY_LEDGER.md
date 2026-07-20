@@ -51,13 +51,13 @@ calibration sequence.
 
 | Reference zone | Axis evidence | Current companion | Required parity direction |
 | --- | --- | --- | --- |
-| Workspace navigation | Capture, Edit, and Project are distinct surfaces (`A:Capture`, `A:Edit`, `A:Project`; `M:p28–32`). | Capture/Edit tabs sit in the title bar; project identity is static (`C:App`). | Add the measured Project entry and preserve the three-surface hierarchy. Do not imply `.mbx` editing support. |
-| Suit/device actions | Connect, calibrate, restore, LED, sleep, and power actions belong to the Suits/device area (`M:p23`, `A:Toolbar`). | Connect, Capture, Zero, Calibrate, Resume, and Record are centralized in a top command bar. | Move or mirror reference actions into the measured Capture docks. Capability gating remains authoritative. |
-| Viewport toolbar | The reference begins with one-to-four panel layouts, then follow and avatar-name controls (`M:p22`, `A:Toolbar`). | One viewport exposes Perspective, Front, Right, Reset, Follow, Labels, and Sensors (`C:Viewport`). | Match reference order and add panel-layout state; retain extra companion tools only in a clearly secondary group. |
+| Workspace navigation | Capture, Edit, and Project are distinct surfaces (`A:Capture`, `A:Edit`, `A:Project`; `M:p28–32`). | Capture/Edit/Project tabs sit in the title bar; Project opens an explicitly local library (`C:App`). | Measure the final geometry and preserve the three-surface hierarchy. Never imply `.mbx` editing support. |
+| Suit/device actions | Connect, calibrate, restore, LED, sleep, and power actions belong to the Suits/device area (`M:p23`, `A:Toolbar`). | The Suits dock is in the right operations rail with the documented action order; supported calibration/posture actions are gated and unsupported hardware actions are disabled with explanations. | Merge the remaining scene/device-detail tabs into the measured dock while capability gating remains authoritative. |
+| Viewport toolbar | The reference begins with one-to-four panel layouts, then follow and avatar-name controls (`M:p22`, `A:Toolbar`). | One-to-four live layouts, Follow, and Labels lead; companion camera/reset/sensor tools follow a divider (`C:Viewport`). | Measure panel geometry and active outlines against the licensed runtime; keep companion-only tools secondary. |
 | Character/device properties | Body Dimensions and Device Detail are dedicated tabs (`M:p26`, `A:Capture`). | The right pane is a joint/sensor inspector; body dimensions are absent. | Recreate the tab/dock placement. Body-dimension writes remain `BLOCKED`; telemetry can be `READ`/`RUNTIME`. |
-| Capture recording | Take Information contains name, notes, record/end, and a clock at the lower right (`M:p26`, `M:p28`, `A:Toolbar`). | Target, name, clock, and Record are in the top command bar; notes are read-only below. | Relocate the recording cluster to the measured Take Information dock and distinguish local versus Axis recording. |
+| Capture recording | Take Information contains name, notes, record/end, and a clock at the lower right (`M:p26`, `M:p28`, `A:Toolbar`). | Target, draft name, clock, and Record/End are in the lower-right Take Information dock; existing notes remain read-only. | Measure final spacing and add safe local notes editing while keeping local and Axis recording distinct. |
 | Edit transport | Playback controls sit at the bottom of Edit (`M:p32`, `A:Edit`). | A bottom Timeline tab has disabled first/play/last controls. | The placement is directionally correct; implement deterministic playback and match the complete measured transport order. |
-| Project library | MotionData and BodySize, search, context actions, import/export/delete, and Explorer reveal live in Project (`M:p28–31`, `A:Project`). | No project browser exists. | Add an honest local-library surface first. Never label local NDJSON as an Axis project or `.mbx`. |
+| Project library | MotionData and BodySize, search, context actions, import/export/delete, and Explorer reveal live in Project (`M:p28–31`, `A:Project`). | A Local Takes tree/table, BodySize boundary, search, ordered disabled file actions, and local context menu exist in Project. | Implement only safe local actions; never label local NDJSON as an Axis project or `.mbx`. |
 | Utility/settings | Device state is upper-right; the hamburger opens Settings (`M:p5–6`). Settings include device/solver/language/shortcuts/router/BVH/Calc/OSC (`A:Settings`). | Upper-right shows downstream connection status and one connection dialog. | Separate application/stream settings from Axis device settings; unavailable device/solver pages remain explanatory and disabled. |
 
 ## Global chrome and workspace actions
@@ -66,7 +66,7 @@ calibration sequence.
 | --- | --- | --- | --- | --- | --- |
 | `NAV-01` | Capture workspace/page | `A:Capture`, `M:p22–28` | Capture title-bar tab | `LIVE` | Runtime capture confirms tab order, dimensions, and selected treatment. |
 | `NAV-02` | Edit workspace/page | `A:Edit`, `M:p31–34` | Edit title-bar tab only switches to the placeholder timeline | `READ` | Selecting a take opens Edit; the same selected take drives viewport and transport. |
-| `NAV-03` | Project workspace/page | `A:Project`, `M:p28–31` | Static “Live Session” project label | `LOCAL` | A distinct Project surface appears in measured position and labels local versus Axis-owned files. |
+| `NAV-03` | Project workspace/page | `A:Project`, `M:p28–31` | Distinct Project tab and full Local Library surface | `LOCAL` | A distinct Project surface appears in measured position and labels local versus Axis-owned files. |
 | `NAV-04` | Active transceiver/device status in upper-right | `M:p5` | Downstream provider host/port status | `RUNTIME` | The label distinguishes Axis hardware state from companion network-source state. |
 | `NAV-05` | Hamburger/settings entry in upper-right | `M:p6`, `A:Settings` | Gear opens Connection & streaming | `LOCAL` | Settings shell matches measured placement; categories declare their owners. |
 | `NAV-06` | Connection/activity/error status | `M:p5–7`, `A:Toolbar` | Title, command, status bar, and diagnostics duplicate state | `READ` | One primary status treatment matches reference; diagnostics retain detailed secondary state. |
@@ -77,33 +77,33 @@ calibration sequence.
 
 | ID | Target placement and reference action | Evidence | Current mapping | Class | Acceptance checkpoint |
 | --- | --- | --- | --- | --- | --- |
-| `CAP-01` | Connect sensors from the Suits window; sensors remain still during progress | `M:p7`, `M:p23`, `A:Toolbar` | Top Connect configures Demo/BVH downstream source | `BLOCKED` | Rename downstream action clearly; direct sensor Connect is disabled until an authorized device API exists. |
+| `CAP-01` | Connect sensors from the Suits window; sensors remain still during progress | `M:p7`, `M:p23`, `A:Toolbar` | Disabled Connect Sensors control is in Suits; top Connect remains explicitly downstream Demo/BVH source setup | `BLOCKED` | Direct sensor Connect remains disabled until an authorized device API exists. |
 | `CAP-02` | Refresh device/suit state | `A:Toolbar` | No equivalent | `RUNTIME` | Visible in reference position and capability-gated; never fabricates refreshed hardware. |
 | `CAP-03` | Start/stop capture | `SDK:Command` | Top Capture; real BVH is receive-only, Demo simulates command | `DEMO` | Optional runtime/relay controls Axis and reports command lifecycle; BVH remains disabled. |
 | `CAP-04` | Zero position | `SDK:Command`, `A:Toolbar` | Top Zero, Demo only | `DEMO` | Result/error is correlated to provider command handle. |
-| `CAP-05` | Calibrate all active suits | `M:p10–14`, `M:p23`, `SDK:Command` | Top Calibrate opens dialog, Demo only | `DEMO` | Pose/countdown/progress comes from `SDK:Progress`, not a hard-coded success. |
+| `CAP-05` | Calibrate all active suits | `M:p10–14`, `M:p23`, `SDK:Command` | Suits-strip Calibrate opens dialog, Demo only | `DEMO` | Pose/countdown/progress comes from `SDK:Progress`, not a hard-coded success. |
 | `CAP-06` | Calibration Next/Cancel | `SDK:Progress` | Dialog actions exist; progress text is a placeholder | `DEMO` | Next is enabled only when provider state permits; cancel/result/error are displayed. |
-| `CAP-07` | Resume original hand posture with V-Pose | `M:p23` | No dedicated action | `BLOCKED` | Show only if a documented command appears; do not map it silently to resume whole posture. |
-| `CAP-08` | Resume original posture with A-Pose between takes | `M:p23`, `SDK:Command` | Top Resume calls `resume_original_posture`, Demo only | `DEMO` | Runtime command and error/progress states are verified. |
+| `CAP-07` | Resume original hand posture with V-Pose | `M:p23` | Dedicated disabled Suits-strip action explains the missing API | `BLOCKED` | Enable only if a documented command appears; do not map it silently to resume whole posture. |
+| `CAP-08` | Resume original posture with A-Pose between takes | `M:p23`, `SDK:Command` | Suits-strip Resume calls `resume_original_posture`, Demo only | `DEMO` | Runtime command and error/progress states are verified. |
 | `CAP-09` | Restore AHRS | `A:Toolbar` | No equivalent | `BLOCKED` | Disabled explanatory control unless an authorized protocol defines it. |
-| `CAP-10` | Sensor LED on/off | `M:p23`, `A:Toolbar` | No equivalent | `BLOCKED` | Disabled for unsupported hardware; state must be read back, not optimistically invented. |
-| `CAP-11` | Put sensors to sleep | `M:p23`, `A:Toolbar` | No equivalent | `BLOCKED` | Requires explicit confirmation and documented hardware command. |
-| `CAP-12` | Power sensors off | `M:p23`, `A:Toolbar` | No equivalent | `BLOCKED` | Requires explicit confirmation and documented hardware command. |
+| `CAP-10` | Sensor LED on/off | `M:p23`, `A:Toolbar` | Reference-position action is present and disabled with an API explanation | `BLOCKED` | Disabled for unsupported hardware; state must be read back, not optimistically invented. |
+| `CAP-11` | Put sensors to sleep | `M:p23`, `A:Toolbar` | Reference-position action is present and disabled with an API explanation | `BLOCKED` | Requires explicit confirmation and documented hardware command. |
+| `CAP-12` | Power sensors off | `M:p23`, `A:Toolbar` | Reference-position action is present and disabled with an API explanation | `BLOCKED` | Requires explicit confirmation and documented hardware command. |
 | `CAP-13` | Round signal marker: green/yellow/red/gray | `M:p24` | Sensor map uses round status markers with good/warning/danger/offline | `DEMO` | Threshold provenance is documented; runtime telemetry replaces simulated values. |
 | `CAP-14` | Square magnetic marker: green/red/gray | `M:p24–25` | Square marker with steady/unstable/offline semantics | `DEMO` | State has text as well as color and is driven by runtime telemetry. |
 | `CAP-15` | Character name field at lower left | `M:p25` | Static avatar name in cards/title; no rename | `RUNTIME` | Placement matches reference; editing requires provider support and a verified result. |
-| `CAP-16` | Mocap mode and frame count at lower right | `M:p25` | Working mode disabled in left pane; frame appears in several locations | `READ` | One measured primary placement; provider-owned mode remains read-only. |
-| `CAP-17` | Body Dimensions tab with template and ruler | `M:p26`, `A:Capture` | Absent | `BLOCKED` | Read-only/disabled reference surface may explain boundary; no solver dimension write is claimed. |
+| `CAP-16` | Mocap mode and frame count at lower right | `M:p25` | Working mode is read-only in the right Suits dock; frame appears in several locations | `READ` | One measured primary placement; provider-owned mode remains read-only. |
+| `CAP-17` | Body Dimensions tab with template and ruler | `M:p26`, `A:Capture` | Read-only tab explains provider ownership; template/apply stay disabled | `BLOCKED` | No solver dimension write is claimed without an authorized interface. |
 | `CAP-18` | Device Detail health columns | `M:p26`, `A:Capture` | Sensor inspector bars/facts | `DEMO` | Reposition to measured tab and map only verified runtime fields. |
 | `VIEW-01` | Central 3D actor viewport; pan/orbit/zoom | `M:p22`, `A:UI` | Three.js viewport with orbit/pan/zoom | `LIVE` | Mouse mapping and camera movement are verified against the target version. |
-| `VIEW-02` | One-panel view | `M:p22`, `A:Toolbar` | Single viewport only | `LIVE` | First layout control selects one panel and is screenshot-covered. |
-| `VIEW-03` | Two-panel view | `M:p22`, `A:Toolbar` | Absent | `LOCAL` | Layout and active-view outline match runtime measurement. |
-| `VIEW-04` | Three-panel view | `M:p22`, `A:Toolbar` | Absent | `LOCAL` | Layout and active-view outline match runtime measurement. |
-| `VIEW-05` | Four-panel view | `M:p22`, `A:Toolbar` | Absent | `LOCAL` | Layout and active-view outline match runtime measurement. |
+| `VIEW-02` | One-panel view | `M:p22`, `A:Toolbar` | Default/selectable one-panel live canvas | `LIVE` | First layout control selects one panel and is screenshot-covered. |
+| `VIEW-03` | Two-panel view | `M:p22`, `A:Toolbar` | Selectable two-canvas live layout | `LOCAL` | Layout and active-view outline match runtime measurement. |
+| `VIEW-04` | Three-panel view | `M:p22`, `A:Toolbar` | Selectable 2:1 three-canvas live layout | `LOCAL` | Layout and active-view outline match runtime measurement. |
+| `VIEW-05` | Four-panel view | `M:p22`, `A:Toolbar` | Selectable 2×2 live layout with perspective/front/right/top cameras | `LOCAL` | Layout and active-view outline match runtime measurement. |
 | `VIEW-06` | Active Follow Cam | `M:p22`, `A:Toolbar` | Follow toggle | `LIVE` | Position/order and active treatment match reference capture. |
 | `VIEW-07` | Toggle Avatar Name | `M:p22`, `A:Toolbar` | Labels toggle | `LIVE` | Position/order and visible label behavior match reference capture. |
 | `VIEW-08` | Curve display/action | `A:Toolbar` | No equivalent | `LOCAL` | Runtime observation defines its precise surface and semantics before implementation. |
-| `VIEW-09` | Reference camera/panel action order | `M:p22`, `A:Toolbar` | Perspective/Front/Right/Reset precede Follow/Labels/Sensors | `LOCAL` | Reference actions lead; companion-only presets move to a secondary, labeled group. |
+| `VIEW-09` | Reference camera/panel action order | `M:p22`, `A:Toolbar` | Layout/Follow/Labels lead; companion camera/reset/sensor tools follow a divider | `LOCAL` | Runtime measurement confirms final order, grouping, and spacing. |
 
 ## Take, Edit, Project, and export actions
 
@@ -112,8 +112,8 @@ calibration sequence.
 | `TAKE-01` | Take Information dock shows other takes | `M:p26` | Bottom Takes list | `LIVE` | Dock placement and columns match measurement while retaining local status labels. |
 | `TAKE-02` | Editable data/take name | `M:p26`, `M:p28` | Name editable only before local recording; recorded metadata read-only | `LIVE` | Local rename is atomic; Axis rename remains disabled without API support. |
 | `TAKE-03` | Editable notes/remarks | `M:p26`, `M:p28` | Notes read-only | `LOCAL` | Local manifest notes can be edited without touching Axis files. |
-| `TAKE-04` | Record/End at bottom of Take Information | `M:p26`, `M:p28`, `A:Toolbar` | Record is in top command bar | `LIVE` | Local record moves to measured cluster; Axis target remains separately capability-gated. |
-| `TAKE-05` | Recording clock beside Record | `M:p26` | Clock in top command bar | `LIVE` | Uses monotonic session duration and measured placement. |
+| `TAKE-04` | Record/End at bottom of Take Information | `M:p26`, `M:p28`, `A:Toolbar` | Record/End is in the lower-right Take Information dock; target remains capability-gated | `LIVE` | Final geometry is checked against the measured cluster. |
+| `TAKE-05` | Recording clock beside Record | `M:p26` | Session clock is beside Record/End in Take Information | `LIVE` | Uses monotonic session duration and measured placement. |
 | `TAKE-06` | Axis-side recording | `SDK:Command` | Target selector; Demo only | `DEMO` | Optional runtime handles start/stop/finish notifications and take path/name. |
 | `EDIT-01` | Selecting a recording automatically opens Edit | `M:p32` | Double-click switches to Edit/timeline; data does not play | `READ` | One selection loads deterministic frames and switches exactly once. |
 | `EDIT-02` | Bottom transport and timeline navigation | `M:p32`, `A:Edit`, `A:Toolbar` | First/play/last disabled; decorative clip | `LOCAL` | Play/pause, seek, frame step, range, and timecode operate on local take frames. |
@@ -126,11 +126,11 @@ calibration sequence.
 | `EDIT-09` | Contact editing | `M:p33`, `A:Edit` | Absent | `BLOCKED` | Requires independently specified editing/processing; never claims Axis processing parity. |
 | `EDIT-10` | Constraint mode and pitch adjustment | `M:p33` | Absent | `BLOCKED` | Same boundary as `EDIT-09`. |
 | `PROJ-01` | Project contains MotionData and BodySize | `M:p28–30`, `A:Project` | Local take library only | `BLOCKED` | Local library must not masquerade as an Axis project; `.mbx` remains opaque. |
-| `PROJ-02` | Folder hierarchy mirrors Windows Explorer | `M:p29–30` | Flat take list | `LOCAL` | Local folders can be implemented; Axis folder mutation remains external. |
-| `PROJ-03` | Keyword search | `M:p30–31` | Joint search only | `LOCAL` | Search local take names/notes with deterministic results. |
-| `PROJ-04` | Import/export/delete files | `M:p30` | Absent | `LOCAL` | Only documented local formats; deletion requires explicit confirmation and recoverability. |
-| `PROJ-05` | Open in File Explorer | `M:p31` | Local path is data only, no action | `LOCAL` | Opens Finder/file manager on a validated local take path. |
-| `PROJ-06` | Context rename and quick export | `M:p31` | Absent | `LOCAL` | Context placement matches reference; supported formats are explicit. |
+| `PROJ-02` | Folder hierarchy mirrors Windows Explorer | `M:p29–30` | One explicit Local Takes root with take rows; nested folders are not implemented | `LOCAL` | Local folders can be implemented; Axis folder mutation remains external. |
+| `PROJ-03` | Keyword search | `M:p30–31` | Project filter searches local take names and notes | `LOCAL` | Search local take names/notes with deterministic results. |
+| `PROJ-04` | Import/export/delete files | `M:p30` | New Folder, Import, Export, and Delete are in reference order but disabled | `LOCAL` | Only documented local formats; deletion requires explicit confirmation and recoverability. |
+| `PROJ-05` | Open in File Explorer | `M:p31` | Context action is present but disabled until a validated desktop bridge is available | `LOCAL` | Opens Finder/file manager on a validated local take path. |
+| `PROJ-06` | Context rename and quick export | `M:p31` | Local context menu exists; Open in Edit works while rename/export/delete remain disabled | `LOCAL` | Context placement matches reference; supported formats are explicit. |
 | `EXP-01` | Save As/Export from lower-right Edit and Project context | `M:p33–34`, `A:Toolbar` | No export action | `LOCAL` | Export origin, range, units, rotation order, and destination are explicit. |
 | `EXP-02` | `.mbx` export/trim | `M:p34` | Absent | `BLOCKED` | Never emit or edit undocumented `.mbx`. |
 | `EXP-03` | FBX options/version/binary/ASCII | `M:p34` | Absent | `LOCAL` | Requires a separately licensed implementation and conformance fixtures. |

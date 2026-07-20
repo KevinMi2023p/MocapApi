@@ -102,9 +102,9 @@ describe("Mocap Studio operator console", () => {
     apiMocks.fetchState.mockResolvedValue(studioState("connected"));
     render(<App />);
 
-    const controls = within(screen.getByRole("region", { name: "Capture controls" }));
-    await waitFor(() => expect(controls.getByRole("button", { name: "Record" })).toBeEnabled());
-    const takeName = screen.getByRole("textbox", { name: "LOCAL TAKE NAME" });
+    const takeInfo = within(screen.getByRole("complementary", { name: "Take information" }));
+    await waitFor(() => expect(takeInfo.getByRole("button", { name: "Record" })).toBeEnabled());
+    const takeName = takeInfo.getByRole("textbox", { name: "LOCAL TAKE NAME" });
     fireEvent.change(takeName, { target: { value: "hero_take" } });
 
     act(() => pushState?.({
@@ -113,7 +113,7 @@ describe("Mocap Studio operator console", () => {
     }));
     expect(takeName).toHaveValue("hero_take");
 
-    fireEvent.click(controls.getByRole("button", { name: "Record" }));
+    fireEvent.click(takeInfo.getByRole("button", { name: "Record" }));
     await waitFor(() => expect(apiMocks.sendCommand).toHaveBeenCalledWith("start_record", { target: "local", takeName: "hero_take" }));
 
     act(() => pushState?.(studioState("connected", {
@@ -124,8 +124,10 @@ describe("Mocap Studio operator console", () => {
     })));
     expect(takeName).toBeDisabled();
     expect(takeName).toHaveValue("hero_take");
+    expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Project" })).toBeDisabled();
 
-    fireEvent.click(controls.getByRole("button", { name: "Stop record" }));
+    fireEvent.click(takeInfo.getByRole("button", { name: "Stop record" }));
     await waitFor(() => expect(apiMocks.sendCommand).toHaveBeenLastCalledWith("stop_record", { target: "local" }));
     act(() => pushState?.(studioState("connected", {
       recording: false,
@@ -140,8 +142,8 @@ describe("Mocap Studio operator console", () => {
     apiMocks.fetchState.mockResolvedValue(studioState("connected"));
     render(<App />);
 
-    const controls = within(screen.getByRole("region", { name: "Capture controls" }));
-    const target = await controls.findByRole("combobox", { name: "Recording target" });
+    const takeInfo = within(screen.getByRole("complementary", { name: "Take information" }));
+    const target = await takeInfo.findByRole("combobox", { name: "Recording target" });
     expect(within(target).getByRole("option", { name: "Local take" })).toBeEnabled();
     expect(within(target).getByRole("option", { name: "Provider / Axis" })).toBeEnabled();
     fireEvent.change(target, { target: { value: "axis" } });
@@ -149,14 +151,14 @@ describe("Mocap Studio operator console", () => {
     expect(screen.getByRole("textbox", { name: "PROVIDER RECORDING" })).toBeDisabled();
     expect(screen.getByRole("textbox", { name: "PROVIDER RECORDING" })).toHaveValue("Managed by provider");
 
-    fireEvent.click(controls.getByRole("button", { name: "Record" }));
+    fireEvent.click(takeInfo.getByRole("button", { name: "Record" }));
     await waitFor(() => expect(apiMocks.sendCommand).toHaveBeenLastCalledWith("start_record", { target: "axis" }));
     act(() => pushState?.(studioState("connected", {
       recording: true,
       recordingTarget: "axis",
       capturing: true,
     })));
-    fireEvent.click(controls.getByRole("button", { name: "Stop record" }));
+    fireEvent.click(takeInfo.getByRole("button", { name: "Stop record" }));
     await waitFor(() => expect(apiMocks.sendCommand).toHaveBeenLastCalledWith("stop_record", { target: "axis" }));
   });
 
@@ -176,10 +178,10 @@ describe("Mocap Studio operator console", () => {
     });
     render(<App />);
 
-    const controls = within(screen.getByRole("region", { name: "Capture controls" }));
-    const stop = await controls.findByRole("button", { name: "Stop record" });
+    const takeInfo = within(screen.getByRole("complementary", { name: "Take information" }));
+    const stop = await takeInfo.findByRole("button", { name: "Stop record" });
     await waitFor(() => expect(stop).toBeEnabled());
-    const target = controls.getByRole("combobox", { name: "Recording target" });
+    const target = takeInfo.getByRole("combobox", { name: "Recording target" });
     expect(target).toBeDisabled();
     expect(target).toHaveValue("axis");
     expect(screen.getByRole("textbox", { name: "PROVIDER RECORDING" })).toHaveValue("Managed by provider");
@@ -265,12 +267,13 @@ describe("Mocap Studio operator console", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Disconnect" })).toBeEnabled());
     expect(controls.getByRole("button", { name: "Capture" })).toBeDisabled();
     expect(screen.getByLabelText(/Capture unavailable: BVH is receive-only/i)).toBeInTheDocument();
-    const recordingTarget = controls.getByRole("combobox", { name: "Recording target" });
+    const takeInfo = within(screen.getByRole("complementary", { name: "Take information" }));
+    const recordingTarget = takeInfo.getByRole("combobox", { name: "Recording target" });
     expect(within(recordingTarget).getByRole("option", { name: "Local take" })).toBeEnabled();
     expect(within(recordingTarget).getByRole("option", { name: "Provider / Axis" })).toBeDisabled();
     fireEvent.change(recordingTarget, { target: { value: "axis" } });
     expect(recordingTarget).toHaveValue("local");
-    fireEvent.click(controls.getByRole("button", { name: "Record" }));
+    fireEvent.click(takeInfo.getByRole("button", { name: "Record" }));
     await waitFor(() => expect(apiMocks.sendCommand).toHaveBeenLastCalledWith("start_record", {
       target: "local",
       takeName: "take001",
@@ -325,9 +328,27 @@ describe("Mocap Studio operator console", () => {
     fireEvent.click(screen.getByRole("button", { name: /Right Upper Arm: telemetry unavailable/i }));
     expect(screen.getByRole("heading", { name: "PNS-09" })).toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("tab", { name: "Body Dimensions" }));
+    expect(screen.getByRole("note")).toHaveTextContent("Body dimensions are provider-owned");
+    expect(screen.getByRole("combobox", { name: "Body template unavailable" })).toBeDisabled();
+
     fireEvent.click(screen.getByRole("button", { name: /Edit/i }));
     expect(screen.getByRole("tab", { name: /Timeline/i })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText("PLAYBACK PLANNED")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Play take (playback planned)" })).toBeDisabled();
+  });
+
+  it("opens the honest local Project workspace and routes a take into Edit", () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Project$/i }));
+    const project = screen.getByRole("region", { name: "Project workspace" });
+    expect(project).toHaveTextContent("Local Library");
+    expect(project).toHaveTextContent(/Axis projects and \.mbx files remain external/i);
+    expect(screen.queryByRole("region", { name: "3D motion preview" })).not.toBeInTheDocument();
+
+    fireEvent.doubleClick(within(project).getByRole("row", { name: /walk_cycle_01/i }));
+    expect(screen.getByRole("button", { name: /^Edit$/i })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("tab", { name: /Timeline/i })).toHaveAttribute("aria-selected", "true");
   });
 });

@@ -23,9 +23,11 @@ import {
   Magnet,
   Play,
   Plug,
+  Power,
   Radio,
   RefreshCw,
   RotateCcw,
+  Ruler,
   Search,
   Settings,
   Signal,
@@ -43,6 +45,7 @@ import {
 } from "lucide-react";
 import { connect, disconnect, fetchState, sendCommand, subscribeToState } from "./api";
 import { CalibrationDialog, ConnectionDialog } from "./components/Dialogs";
+import { ProjectWorkspace } from "./components/ProjectWorkspace";
 import { SensorMap } from "./components/SensorMap";
 import {
   SkeletonViewport,
@@ -62,7 +65,7 @@ import type {
 } from "./types";
 
 type LeftTab = "suits" | "scene" | "sensors";
-type InspectorTab = "joint" | "sensor";
+type InspectorTab = "joint" | "sensor" | "body";
 
 const defaultConnection: ConnectionSettings = {
   mode: "demo",
@@ -130,6 +133,33 @@ function ToolbarAction({
       >
         <span className="tool-action-icon">{children}</span>
         <span>{label}</span>
+      </button>
+    </span>
+  );
+}
+
+function DockAction({
+  label,
+  disabledReason,
+  onClick,
+  children,
+}: {
+  label: string;
+  disabledReason?: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  const disabled = Boolean(disabledReason);
+  return (
+    <span
+      className="dock-action-tooltip"
+      data-tooltip={disabledReason ?? label}
+      title={disabledReason ?? label}
+      tabIndex={disabled ? 0 : -1}
+      aria-label={disabled ? `${label} unavailable: ${disabledReason}` : undefined}
+    >
+      <button type="button" className="dock-action" aria-label={label} disabled={disabled} onClick={onClick}>
+        {children}
       </button>
     </span>
   );
@@ -436,9 +466,9 @@ export default function App() {
         <div className="project-identity">
           <FolderOpen size={14} />
           <span className="project-label">PROJECT</span>
-          <strong>Live Session</strong>
+          <strong>{workspace === "project" ? "Local Library" : "Live Session"}</strong>
           <span className="project-separator">/</span>
-          <span>{primaryAvatar?.name ?? "No performer"}</span>
+          <span>{workspace === "project" ? "Local Takes" : primaryAvatar?.name ?? "No performer"}</span>
         </div>
 
         <nav className="workspace-tabs" aria-label="Workspace">
@@ -454,12 +484,24 @@ export default function App() {
             type="button"
             className={workspace === "edit" ? "active" : ""}
             aria-current={workspace === "edit" ? "page" : undefined}
+            disabled={state.session.recording}
+            title={state.session.recording ? "End the current recording before opening Edit" : "Open Edit"}
             onClick={() => {
               setWorkspace("edit");
               setBottomTab("timeline");
             }}
           >
             <SlidersHorizontal size={13} /> Edit
+          </button>
+          <button
+            type="button"
+            className={workspace === "project" ? "active" : ""}
+            aria-current={workspace === "project" ? "page" : undefined}
+            disabled={state.session.recording}
+            title={state.session.recording ? "End the current recording before opening Project" : "Open Project"}
+            onClick={() => setWorkspace("project")}
+          >
+            <FolderOpen size={13} /> Project
           </button>
         </nav>
 
@@ -477,6 +519,19 @@ export default function App() {
         </div>
       </header>
 
+      {workspace === "project" ? (
+        <ProjectWorkspace
+          takes={state.takes}
+          selectedTakeId={selectedTake?.id ?? null}
+          onSelectTake={chooseTake}
+          onOpenTake={(take) => {
+            chooseTake(take);
+            setWorkspace("edit");
+            setBottomTab("timeline");
+          }}
+        />
+      ) : (
+        <>
       <section className="command-bar" aria-label="Capture controls">
         <div className="command-group connection-command">
           <ToolbarAction
@@ -512,79 +567,63 @@ export default function App() {
           >
             <RotateCcw size={18} />
           </ToolbarAction>
-          <ToolbarAction
-            label="Calibrate"
-            tooltip="Open provider-guided posture calibration"
-            disabledReason={calibrationDisabled}
-            onClick={() => setCalibrationDialogOpen(true)}
-          >
-            <Sparkles size={18} />
-          </ToolbarAction>
-          <ToolbarAction
-            label="Resume"
-            tooltip="Resume the provider's last original posture"
-            disabledReason={commandDisabled}
-            onClick={() => void execute("resume_original_posture").catch(() => {})}
-          >
-            <RefreshCw size={18} />
-          </ToolbarAction>
         </div>
-        <span className="command-divider flexible" />
-        <div className="recording-target-control">
-          <label htmlFor="recording-target">RECORD TO</label>
-          <select
-            id="recording-target"
-            aria-label="Recording target"
-            value={recordingTarget}
-            disabled={Boolean(recordingDisabled) || state.session.recording || recordingCommandPending}
-            onChange={(event) => {
-              const nextTarget = event.target.value as RecordingTarget;
-              const nextAvailable = nextTarget === "local"
-                ? state.capabilities.localRecording
-                : state.capabilities.axisRecording;
-              if (nextAvailable) setRecordingTarget(nextTarget);
-            }}
-          >
-            <option value="local" disabled={!state.capabilities.localRecording}>Local take</option>
-            <option value="axis" disabled={!state.capabilities.axisRecording}>Provider / Axis</option>
-          </select>
-        </div>
-        <div className="take-name-control">
-          <label htmlFor="take-name">{recordingTarget === "local" ? "LOCAL TAKE NAME" : "PROVIDER RECORDING"}</label>
-          <input
-            id="take-name"
-            value={recordingTarget === "local" ? takeNameDraft : "Managed by provider"}
-            disabled={recordingTarget !== "local" || state.session.recording || recordingCommandPending}
-            onChange={(event) => {
-              takeNameDirty.current = true;
-              setTakeNameDraft(event.target.value);
-            }}
-          />
-        </div>
-        <div className={`capture-clock${state.session.recording ? " recording" : ""}`}>
-          <Clock3 size={15} />
-          <strong>{formatDuration(state.session.elapsedMs, true)}</strong>
-          <span>{state.session.recording ? "REC" : "TIMECODE"}</span>
-        </div>
-        <ToolbarAction
-          label={state.session.recording ? "Stop record" : "Record"}
-          tooltip={state.session.recording
-            ? `Stop the ${(state.session.recordingTarget ?? activeRecordingTarget.current) === "local" ? "local" : "provider"} recording`
-            : recordingTarget === "local"
-              ? "Start a crash-recoverable local take"
-              : "Start recording in the connected provider"}
-          danger
-          active={state.session.recording}
-          disabledReason={recordingActionDisabled}
-          onClick={() => void recordNow()}
-        >
-          {state.session.recording ? <Square size={17} /> : <CircleDot size={19} />}
-        </ToolbarAction>
       </section>
 
       <section className="main-workspace">
         <aside className="left-pane workstation-pane" aria-label="Suits and scene">
           <PaneTitle title="Suits" subtitle={`${state.avatars.length} performer${state.avatars.length === 1 ? "" : "s"}`} />
+          <div className="suit-command-strip" aria-label="Suit hardware controls">
+            <DockAction
+              label="Connect sensors"
+              disabledReason="Direct sensor pairing is controlled by Axis and is not exposed by MocapApi"
+              onClick={() => undefined}
+            >
+              <Cable size={14} />
+            </DockAction>
+            <DockAction
+              label="Calibrate"
+              disabledReason={calibrationDisabled}
+              onClick={() => setCalibrationDialogOpen(true)}
+            >
+              <Sparkles size={14} />
+            </DockAction>
+            <DockAction
+              label="Resume hand posture"
+              disabledReason="The documented V-Pose hand command is not exposed by MocapApi"
+              onClick={() => undefined}
+            >
+              <Bone size={14} />
+            </DockAction>
+            <DockAction
+              label="Resume original posture"
+              disabledReason={commandDisabled}
+              onClick={() => void execute("resume_original_posture").catch(() => {})}
+            >
+              <RefreshCw size={14} />
+            </DockAction>
+            <DockAction
+              label="Sensor LED"
+              disabledReason="Sensor LED control is not exposed by MocapApi"
+              onClick={() => undefined}
+            >
+              <Zap size={14} />
+            </DockAction>
+            <DockAction
+              label="Sleep sensors"
+              disabledReason="Sensor sleep is not exposed by MocapApi"
+              onClick={() => undefined}
+            >
+              <Clock3 size={14} />
+            </DockAction>
+            <DockAction
+              label="Power off sensors"
+              disabledReason="Sensor power control is not exposed by MocapApi"
+              onClick={() => undefined}
+            >
+              <Power size={14} />
+            </DockAction>
+          </div>
           <div className="pane-tab-strip" role="tablist" aria-label="Suit views">
             <button type="button" role="tab" aria-selected={leftTab === "suits"} className={leftTab === "suits" ? "active" : ""} onClick={() => setLeftTab("suits")}><UsersRound size={13} /> Suits</button>
             <button type="button" role="tab" aria-selected={leftTab === "scene"} className={leftTab === "scene" ? "active" : ""} onClick={() => setLeftTab("scene")}><ListTree size={13} /> Scene</button>
@@ -594,11 +633,6 @@ export default function App() {
           <div className="pane-content left-pane-content">
             {leftTab === "suits" ? (
               <div className="suits-view">
-                <div className="suit-toolbar">
-                  <div className="capability-ribbon" title="Direct suit pairing is not exposed by MocapApi">
-                    <Cable size={13} /> Pairing is provider-owned <span>READ-ONLY</span>
-                  </div>
-                </div>
                 <div className="entity-list">
                   {state.avatars.map((avatar) => {
                     const calibrationKnown = connected
@@ -734,10 +768,11 @@ export default function App() {
         />
 
         <aside className="right-pane workstation-pane" aria-label="Joint and sensor inspector">
-          <PaneTitle title="Inspector" subtitle={inspectorTab === "joint" ? "Skeleton" : "Device detail"} />
+          <PaneTitle title="Properties" subtitle={inspectorTab === "joint" ? "Skeleton" : inspectorTab === "sensor" ? "Device detail" : "Provider-owned"} />
           <div className="pane-tab-strip inspector-tabs" role="tablist" aria-label="Inspector views">
-            <button type="button" role="tab" aria-selected={inspectorTab === "joint"} className={inspectorTab === "joint" ? "active" : ""} onClick={() => setInspectorTab("joint")}><Bone size={13} /> Joint</button>
-            <button type="button" role="tab" aria-selected={inspectorTab === "sensor"} className={inspectorTab === "sensor" ? "active" : ""} onClick={() => setInspectorTab("sensor")}><Cpu size={13} /> Sensor</button>
+            <button type="button" role="tab" aria-selected={inspectorTab === "joint"} className={inspectorTab === "joint" ? "active" : ""} onClick={() => setInspectorTab("joint")}><Bone size={13} /> Skeleton</button>
+            <button type="button" role="tab" aria-selected={inspectorTab === "sensor"} className={inspectorTab === "sensor" ? "active" : ""} onClick={() => setInspectorTab("sensor")}><Cpu size={13} /> Device Detail</button>
+            <button type="button" role="tab" aria-selected={inspectorTab === "body"} className={inspectorTab === "body" ? "active" : ""} onClick={() => setInspectorTab("body")}><Ruler size={13} /> Body Dimensions</button>
           </div>
           <div className="pane-content inspector-content">
             {inspectorTab === "joint" && selectedJoint ? (
@@ -815,6 +850,16 @@ export default function App() {
                 )}
               </div>
             ) : null}
+
+            {inspectorTab === "body" ? (
+              <div className="body-dimensions-boundary" role="note">
+                <span><Ruler size={24} /></span>
+                <strong>Body dimensions are provider-owned</strong>
+                <p>MocapApi does not expose Axis body templates or solver dimension editing. This surface is intentionally read-only until an authorized runtime provides verified fields.</p>
+                <label><span>Body template</span><select aria-label="Body template unavailable" disabled><option>Unavailable from provider</option></select></label>
+                <button type="button" disabled>Apply unavailable</button>
+              </div>
+            ) : null}
           </div>
         </aside>
       </section>
@@ -853,11 +898,70 @@ export default function App() {
                     ))}
                   </div>
                 </div>
-                <aside className="take-information">
-                  <div className="take-info-heading"><strong>Take information</strong><span>READ-ONLY</span></div>
-                  <label><span>Name</span><input value={selectedTake?.name ?? takeNameDraft} readOnly /></label>
-                  <label><span>Notes</span><input value={selectedTake?.notes ?? "Ready to record"} readOnly /></label>
-                  <div className="take-info-footer"><span><Clock3 size={12} /> {selectedTake ? formatDuration(selectedTake.durationMs, true) : formatDuration(state.session.elapsedMs, true)}</span><small>Double-click a take to edit</small></div>
+                <aside className="take-information" aria-label="Take information">
+                  <div className="take-info-heading">
+                    <strong>Take information</strong>
+                    <span className={state.session.recording ? "recording" : ""}>
+                      {state.session.recording ? "RECORDING" : captureWorkspace ? "READY" : "CAPTURE ONLY"}
+                    </span>
+                  </div>
+                  <div className="take-recording-fields">
+                    <label>
+                      <span>RECORD TO</span>
+                      <select
+                        aria-label="Recording target"
+                        value={recordingTarget}
+                        disabled={Boolean(recordingDisabled) || state.session.recording || recordingCommandPending}
+                        onChange={(event) => {
+                          const nextTarget = event.target.value as RecordingTarget;
+                          const nextAvailable = nextTarget === "local"
+                            ? state.capabilities.localRecording
+                            : state.capabilities.axisRecording;
+                          if (nextAvailable) setRecordingTarget(nextTarget);
+                        }}
+                      >
+                        <option value="local" disabled={!state.capabilities.localRecording}>Local take</option>
+                        <option value="axis" disabled={!state.capabilities.axisRecording}>Provider / Axis</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>{recordingTarget === "local" ? "LOCAL TAKE NAME" : "PROVIDER RECORDING"}</span>
+                      <input
+                        aria-label={recordingTarget === "local" ? "LOCAL TAKE NAME" : "PROVIDER RECORDING"}
+                        value={recordingTarget === "local" ? takeNameDraft : "Managed by provider"}
+                        disabled={recordingTarget !== "local" || state.session.recording || recordingCommandPending || !captureWorkspace}
+                        onChange={(event) => {
+                          takeNameDirty.current = true;
+                          setTakeNameDraft(event.target.value);
+                        }}
+                      />
+                    </label>
+                  </div>
+                  <label className="take-notes-field">
+                    <span>NOTES <small>SELECTED TAKE · READ-ONLY</small></span>
+                    <input aria-label="Selected take notes" value={selectedTake?.notes ?? "No take selected"} readOnly />
+                  </label>
+                  <div className="take-recording-footer">
+                    <div className={`take-recording-clock${state.session.recording ? " recording" : ""}`}>
+                      <Clock3 size={13} />
+                      <span><strong>{formatDuration(state.session.elapsedMs, true)}</strong><small>{state.session.recording ? "REC" : "TIMECODE"}</small></span>
+                    </div>
+                    <button
+                      type="button"
+                      className={`take-record-button${state.session.recording ? " active" : ""}`}
+                      aria-label={state.session.recording ? "Stop record" : "Record"}
+                      title={recordingActionDisabled ?? (state.session.recording
+                        ? `Stop the ${(state.session.recordingTarget ?? activeRecordingTarget.current) === "local" ? "local" : "provider"} recording`
+                        : recordingTarget === "local"
+                          ? "Start a crash-recoverable local take"
+                          : "Start recording in the connected provider")}
+                      disabled={Boolean(recordingActionDisabled)}
+                      onClick={() => void recordNow()}
+                    >
+                      {state.session.recording ? <Square size={13} /> : <CircleDot size={15} />}
+                      <span>{state.session.recording ? "End" : "Record"}</span>
+                    </button>
+                  </div>
                 </aside>
               </div>
             ) : null}
@@ -913,6 +1017,9 @@ export default function App() {
           </div>
         ) : null}
       </section>
+
+        </>
+      )}
 
       <footer className="status-bar">
         <div className="status-left">

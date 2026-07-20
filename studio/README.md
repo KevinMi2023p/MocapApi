@@ -13,10 +13,11 @@ uses a browser for its UI, and keeps recordings on the local machine.
 > directly. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 This project takes layout cues from the workflow documented in the Axis Studio
-manual—capture controls across the top, scene/sensor navigation, a 3D viewport,
-properties, takes, timeline, and diagnostics—but it does not copy Noitom assets
-and is not a drop-in replacement for Axis Studio. Axis Studio still owns the
-hardware connection, sensor fusion, calibration solver, and data broadcast.
+manual—Capture/Edit/Project workspaces, a right-side suit operations rail,
+one-to-four 3D views, lower-right Take Information, timeline, and diagnostics—
+but it does not copy Noitom assets and is not a drop-in replacement for Axis
+Studio. Axis Studio still owns the hardware connection, sensor fusion,
+calibration solver, and data broadcast.
 
 ## Install
 
@@ -122,12 +123,12 @@ hardware compatibility.
 | Capability | Demo | Standard BVH from Axis | Notes |
 | --- | :---: | :---: | --- |
 | Live skeleton and multi-actor scene tree | Yes | Yes | Receives multiple solved avatars; the viewport focuses the selected actor. |
-| 3D viewport, hierarchy, properties | Yes | Yes | Axis-inspired independent UI. |
+| 1–4 live 3D viewports, hierarchy, properties | Yes | Yes | Axis-inspired independent UI with perspective/front/right/top panels. |
 | Signal/battery/magnetic sensor telemetry | Simulated | No | Requires Calc/MocapApi runtime support. |
 | Capture/zero/calibration/resume commands | Simulated | No | BVH is a downstream motion-only transport. |
 | Axis-side recording control | Simulated | No | Requires compatible native MocapApi command support. |
 | Crash-recoverable local recording | Yes | Yes | NDJSON take format; original Axis data is untouched. |
-| Local take list and diagnostics | Yes | Yes | Includes frame/network health and event history. |
+| Local Project library, take list and diagnostics | Yes | Yes | Includes local search, metadata, frame/network health, and event history. |
 | `.mbx` project browsing/editing | No | No | `.mbx` is proprietary; no project repair API exists. |
 | Axis playback, processing, FBX/BVH/CSV export | No | No | Continue to use Axis Studio for these workflows. |
 | Direct suit pairing, firmware, sensor fusion | No | No | Remains in Axis Studio on Windows. |

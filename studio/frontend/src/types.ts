@@ -1,6 +1,6 @@
 export type ConnectionMode = "demo" | "bvh" | "mocap-api";
 export type Transport = "udp" | "tcp";
-export type WorkspaceTab = "capture" | "edit";
+export type WorkspaceTab = "capture" | "edit" | "project";
 export type BottomTab = "takes" | "timeline" | "events" | "diagnostics";
 export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
 export type RecordingTarget = "local" | "axis";

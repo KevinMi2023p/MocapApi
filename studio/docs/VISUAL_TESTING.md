@@ -20,10 +20,11 @@ access-controlled directory outside this repository.
   production capability gates prevent unsupported actions.
 - A single worker prevents GPU and Vite scheduling from changing capture order.
 
-The initial scenarios are disconnected Capture, connected Capture, calibration
-ready, and Edit timeline. Each runs at both fixed viewports. Add a focused
-scenario when a row in [PARITY_LEDGER.md](PARITY_LEDGER.md) gains a new visible
-state or changes placement.
+The scenarios are disconnected Capture, connected Capture, four-panel Capture,
+calibration ready, Edit timeline, and the local Project library. Each runs at
+both fixed viewports. Add a focused scenario when a row in
+[PARITY_LEDGER.md](PARITY_LEDGER.md) gains a new visible state or changes
+placement.
 
 The checked-in baselines are Linux Chromium images, matching the Ubuntu CI
 environment. Playwright deliberately uses a platform suffix, so a macOS run does

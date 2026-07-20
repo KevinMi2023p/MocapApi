@@ -31,7 +31,7 @@ covers the dependencies actually emitted into the browser JavaScript, rather tha
 over-reporting every development or optional package installed by npm.
 
 Coverage for this build: **14 installed package instances**,
-**13 package names**, and **98 third-party source-map
+**13 package names**, and **107 third-party source-map
 entries** across **1 production source map(s)**.
 
 | Package | Version | SPDX/license | Locked install path | Bundled modules | License source |
@@ -40,7 +40,7 @@ entries** across **1 production source map(s)**.
 | [@react-three/drei](https://github.com/pmndrs/drei) | 9.122.0 | MIT | `node_modules/@react-three/drei` | 11 | `node_modules/@react-three/drei/LICENSE` |
 | [@react-three/fiber](https://github.com/pmndrs/react-three-fiber) | 8.18.0 | MIT | `node_modules/@react-three/fiber` | 2 | `studio/packaging/license_fallbacks/react-three-fiber-8.18.0.LICENSE (from https://github.com/pmndrs/react-three-fiber/blob/v8.18.0/LICENSE)` |
 | [its-fine](https://github.com/pmndrs/its-fine) | 1.2.5 | MIT | `node_modules/its-fine` | 1 | `node_modules/its-fine/LICENSE` |
-| [lucide-react](https://github.com/lucide-icons/lucide) | 0.468.0 | ISC | `node_modules/lucide-react` | 56 | `node_modules/lucide-react/LICENSE` |
+| [lucide-react](https://github.com/lucide-icons/lucide) | 0.468.0 | ISC | `node_modules/lucide-react` | 65 | `node_modules/lucide-react/LICENSE` |
 | [react](https://github.com/facebook/react) | 18.3.1 | MIT | `node_modules/react` | 4 | `node_modules/react/LICENSE` |
 | [react-dom](https://github.com/facebook/react) | 18.3.1 | MIT | `node_modules/react-dom` | 3 | `node_modules/react-dom/LICENSE` |
 | [react-reconciler](https://github.com/facebook/react) | 0.27.0 | MIT | `node_modules/react-reconciler` | 4 | `node_modules/react-reconciler/LICENSE` |
@@ -53,7 +53,7 @@ entries** across **1 production source map(s)**.
 
 Source maps inspected:
 
-- `studio/backend/mocap_studio/static/assets/index-CvcgVl0t.js.map`
+- `studio/backend/mocap_studio/static/assets/index-DWiSIkci.js.map`
 
 Generation fails if a bundled package is absent from the lockfile, lacks
 license metadata/text, escapes `node_modules`, or changes a version-pinned

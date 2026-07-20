@@ -9,7 +9,7 @@
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
     "test:visual": "playwright test",
-    "test:visual:update": "playwright test --update-snapshots"
+    "test:visual:update": "playwright test --update-snapshots=all"
   },
   "dependencies": {
     "@react-three/drei": "^9.114.3",

@@ -19,6 +19,9 @@ source, failure mode, UI state, tests, and platform support are all explicit.
 ## Pass 2 — live interoperability matrix
 
 - [x] Add a provenance-backed parity/action ledger and deterministic open-source visual fixtures
+- [x] Add Capture/Edit/Project navigation and an explicitly local take-library surface
+- [x] Add selectable one-to-four-panel live viewports in the documented toolbar order
+- [x] Move suit operations right and recording into lower-right Take Information
 - [ ] Capture private, fixed-version Windows reference states and record measured placement deltas
 - [ ] Validate string and both published 64-byte binary header generations against captured Axis Studio 2/3 data
 - [ ] Validate 1–4 avatars, all six rotations, displacement modes, UDP loss and TCP reconnect

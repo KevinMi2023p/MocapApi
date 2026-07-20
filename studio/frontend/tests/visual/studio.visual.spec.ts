@@ -91,6 +91,13 @@ test.describe("deterministic open-source studio baselines", () => {
     await expect(page).toHaveScreenshot("capture-connected.png", { fullPage: true });
   });
 
+  test("four-panel capture workspace", async ({ page }) => {
+    await openFixture(page, connectedCaptureFixture());
+    await page.getByRole("button", { name: "4-panel layout" }).click();
+    await expect(page.getByRole("group", { name: "4-panel viewport layout" })).toBeVisible();
+    await expect(page).toHaveScreenshot("capture-four-panel.png", { fullPage: true });
+  });
+
   test("calibration ready dialog", async ({ page }) => {
     await openFixture(page, connectedCaptureFixture());
     await page.getByRole("button", { name: "Calibrate", exact: true }).click();
@@ -103,5 +110,13 @@ test.describe("deterministic open-source studio baselines", () => {
     await page.getByRole("button", { name: "Edit" }).click();
     await expect(page.getByRole("tab", { name: "Timeline" })).toHaveAttribute("aria-selected", "true");
     await expect(page).toHaveScreenshot("edit-timeline.png", { fullPage: true });
+  });
+
+  test("local project workspace", async ({ page }) => {
+    await openFixture(page, connectedCaptureFixture());
+    await page.getByRole("button", { name: "Project", exact: true }).click();
+    await expect(page.getByRole("region", { name: "Project workspace" })).toBeVisible();
+    await expect(page.getByRole("table", { name: "Local takes" })).toBeVisible();
+    await expect(page).toHaveScreenshot("project-local-library.png", { fullPage: true });
   });
 });
