@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 KevinMi2023p
+
+FROM ubuntu:24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        fonts-dejavu-core \
+        fonts-liberation \
+        imagemagick \
+        openbox \
+        tar \
+        wine \
+        wmctrl \
+        x11-utils \
+        xdotool \
+        xvfb \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --create-home --uid 10001 --shell /bin/sh analyst
+
+COPY entrypoint.sh /usr/local/bin/axis-wine-reference
+RUN chmod 0755 /usr/local/bin/axis-wine-reference
+
+USER analyst
+WORKDIR /home/analyst
+
+ENV DISPLAY=:99 \
+    WINEARCH=win64 \
+    WINEDEBUG=-all \
+    WINEPREFIX=/home/analyst/wine-prefix
+
+ENTRYPOINT ["/usr/local/bin/axis-wine-reference"]

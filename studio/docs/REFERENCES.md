@@ -3,6 +3,12 @@
 This index records the sources used to design interoperable behavior and an original UI.
 No screenshots, logos, meshes, pose animations, or other Noitom assets are redistributed.
 
+The control-by-control evidence, placement gaps, and support classifications are
+maintained in [PARITY_LEDGER.md](PARITY_LEDGER.md). The open-source screenshot
+protocol is documented in [VISUAL_TESTING.md](VISUAL_TESTING.md). Linux USB,
+Wine, and Windows-VM boundaries are recorded in
+[USB_ON_LINUX.md](USB_ON_LINUX.md).
+
 ## Primary product references
 
 - Attached **Axis Studio Manual**, 52 PDF pages, supplied by the project owner. Useful
