@@ -25,8 +25,8 @@ Requirements are macOS or Linux, Python 3.10+, a modern browser, and `curl` for
 remote installation. Installation is per-user and never needs `sudo`.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/KevinMi2023p/MocapApi/refs/tags/studio-v0.3.0/install.sh \
-  | sh -s -- --version 0.3.0 --launch
+curl -fsSL https://raw.githubusercontent.com/KevinMi2023p/MocapApi/refs/tags/studio-v0.4.0/install.sh \
+  | sh -s -- --version 0.4.0 --launch
 ```
 
 For GitHub-hosted releases, the installer resolves the exact tagged assets
@@ -58,6 +58,43 @@ the first session immediately. Use `--no-modify-path` (or
 the installer prints the full command path. `--no-desktop-integration` skips
 the app-drawer entry or app bundle. Custom `--prefix` and `--bin-dir` locations
 are never added automatically.
+
+### Terminal help and Tab completion
+
+Fresh installs add local, network-free completion for Bash, Zsh, and Fish. Open
+a new terminal and type `mocap-studio` followed by **Tab** to complete commands
+and supported options. Completion understands launch flags, `help`, `update`,
+`uninstall`, and their command-specific options; completing a directory after
+`--data-dir` also works. Pressing Tab never launches Mocap Studio or performs an
+update, uninstall, or network request.
+
+The main and command-specific help menus are available with:
+
+```sh
+mocap-studio --help
+mocap-studio help update
+mocap-studio help uninstall
+mocap-studio help completion
+```
+
+Invalid commands and flags exit without taking action and point to the relevant
+help menu. Runtime command and launch-flag typos also suggest a likely spelling
+when one is clear. To install or repair the completion registration explicitly,
+run:
+
+```sh
+mocap-studio completion install
+```
+
+Users updating from `0.3.0` should run that command once after
+`mocap-studio update`, because the `0.3.0` updater predates completion setup.
+For temporary activation without changing a startup file, Bash and Zsh users
+can run `source <(mocap-studio completion bash)` or
+`source <(mocap-studio completion zsh)`; Fish users can run
+`mocap-studio completion fish | source`. The lower-level installer option
+`--no-shell-completions` skips completion files entirely. `--no-modify-path`
+still leaves startup files unchanged; standard completion files are installed,
+and the explicit commands above remain available.
 
 Application versions are stored under `~/.local/share/mocap-studio` on Linux and
 `~/Library/Application Support/Mocap Studio` on macOS. Takes use the platform's
@@ -109,8 +146,9 @@ mocap-studio uninstall --yes
 When PATH setup was disabled, use
 `~/.local/bin/mocap-studio uninstall`. Uninstall removes only ownership-marked
 version directories, the managed command link, and the Linux desktop entry/icon
-or macOS app bundle. It refuses to remove unmanaged paths and leaves the managed
-PATH block in place because `~/.local/bin` may contain unrelated tools.
+or macOS app bundle. It also removes installer-owned completion files and their
+completion startup block. It refuses to remove unmanaged paths and leaves the
+managed PATH block in place because `~/.local/bin` may contain unrelated tools.
 
 Recorded takes are always preserved at:
 
@@ -130,8 +168,8 @@ From a repository checkout, the lower-level installer also supports:
 ./install.sh --uninstall
 
 # Override release hosting/repository
-./install.sh --repo KevinMi2023p/MocapApi --version 0.3.0
-./install.sh --release-base-url https://downloads.example.test/releases --version 0.3.0
+./install.sh --repo KevinMi2023p/MocapApi --version 0.4.0
+./install.sh --release-base-url https://downloads.example.test/releases --version 0.4.0
 
 # Launch an existing installation
 ./install.sh --launch
@@ -142,9 +180,10 @@ The remote installer detects `linux-x86_64`, `linux-aarch64`,
 `.sha256`, verifies the checksum before extraction, rejects unsafe archive
 paths, refuses root/sudo use, and will not replace an unmanaged command or an
 existing version directory. Desktop integration follows the same collision
-rule. `--prefix`, `--data-home`, and `--bin-dir` provide explicit location
-overrides. `--yes` is accepted only to confirm uninstall in a non-interactive
-shell.
+rule, as does shell completion. Use `--no-shell-completions` when completion
+paths are intentionally managed elsewhere. `--prefix`, `--data-home`, and
+`--bin-dir` provide explicit location overrides. `--yes` is accepted only to
+confirm uninstall in a non-interactive shell.
 
 ## Configure Axis Studio
 
@@ -209,6 +248,9 @@ PYTHONPATH=studio/backend python3 -m unittest discover -s studio/backend/tests -
 python3 -m unittest studio/packaging/test_installer_archive.py -v
 python3 -m unittest studio/packaging/test_installer_remote.py -v
 python3 -m unittest studio/packaging/test_desktop_integration.py -v
+python3 -m unittest studio/packaging/test_shell_completions.py -v
+python3 -m unittest studio/packaging/test_completion_integration.py -v
+python3 -m unittest studio/packaging/test_cli_help.py -v
 studio/packaging/smoke_installer.sh
 PYTHONPATH=studio/backend python3 -m mocap_studio
 ```
@@ -218,11 +260,12 @@ library. For a deterministic release archive after building the UI:
 
 ```sh
 python3 studio/packaging/build_release.py \
-  --version 0.3.0 --target linux-x86_64 --output-dir dist
+  --version 0.4.0 --target linux-x86_64 --output-dir dist
 ```
 
 The builder has an explicit allow-list. It packages only the new backend,
-prebuilt static UI, command/desktop launchers, original application icon,
+prebuilt static UI, command/desktop launchers, shell-completion assets,
+original application icon,
 README, Apache license, `NOTICE`, and generated third-party notices. It
 normalizes archive order, ownership, modes, timestamps, and gzip metadata,
 emits a SHA256 file, and refuses to overwrite an asset. It never traverses the
