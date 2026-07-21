@@ -5,4 +5,4 @@ data into one scene model, while the browser UI talks only to the local HTTP API
 """
 
 APPLICATION_ID = "io.github.KevinMi2023p.MocapStudio"
-__version__ = "0.4.0"
+__version__ = "0.4.1"

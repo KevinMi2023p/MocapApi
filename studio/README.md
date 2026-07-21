@@ -25,8 +25,8 @@ Requirements are macOS or Linux, Python 3.10+, a modern browser, and `curl` for
 remote installation. Installation is per-user and never needs `sudo`.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/KevinMi2023p/MocapApi/refs/tags/studio-v0.4.0/install.sh \
-  | sh -s -- --version 0.4.0 --launch
+curl -fsSL https://raw.githubusercontent.com/KevinMi2023p/MocapApi/refs/tags/studio-v0.4.1/install.sh \
+  | sh -s -- --version 0.4.1 --launch
 ```
 
 For GitHub-hosted releases, the installer resolves the exact tagged assets
@@ -62,11 +62,13 @@ are never added automatically.
 ### Terminal help and Tab completion
 
 Fresh installs add local, network-free completion for Bash, Zsh, and Fish. Open
-a new terminal and type `mocap-studio` followed by **Tab** to complete commands
-and supported options. Completion understands launch flags, `help`, `update`,
-`uninstall`, and their command-specific options; completing a directory after
-`--data-dir` also works. Pressing Tab never launches Mocap Studio or performs an
-update, uninstall, or network request.
+a new terminal and type `mocap-studio upd`, then press **Tab**: the shell fills
+in `mocap-studio update `. Type `mocap-studio u` and press **Tab** again if
+needed to list both `update` and `uninstall`. The program name must come first;
+plain `upd` is not in Mocap Studio's completion context. Completion also
+understands launch flags, `help`, and command-specific options; completing a
+directory after `--data-dir` works as well. Pressing Tab never launches Mocap
+Studio or performs an update, uninstall, or network request.
 
 The main and command-specific help menus are available with:
 
@@ -86,8 +88,20 @@ run:
 mocap-studio completion install
 ```
 
+That command repairs startup registration even when the original installation
+used `--no-modify-path`. It prints the exact command for enabling completion in
+the current Bash, Zsh, or Fish session; opening a new terminal also activates
+it. For example, Bash users can immediately run:
+
+```sh
+source <(mocap-studio completion bash)
+```
+
 Users updating from `0.3.0` should run that command once after
 `mocap-studio update`, because the `0.3.0` updater predates completion setup.
+Users whose `0.4.0` completion files were installed with
+`--no-modify-path` should also run it once so `0.4.1` can repair their startup
+registration.
 For temporary activation without changing a startup file, Bash and Zsh users
 can run `source <(mocap-studio completion bash)` or
 `source <(mocap-studio completion zsh)`; Fish users can run
@@ -168,8 +182,8 @@ From a repository checkout, the lower-level installer also supports:
 ./install.sh --uninstall
 
 # Override release hosting/repository
-./install.sh --repo KevinMi2023p/MocapApi --version 0.4.0
-./install.sh --release-base-url https://downloads.example.test/releases --version 0.4.0
+./install.sh --repo KevinMi2023p/MocapApi --version 0.4.1
+./install.sh --release-base-url https://downloads.example.test/releases --version 0.4.1
 
 # Launch an existing installation
 ./install.sh --launch
@@ -260,7 +274,7 @@ library. For a deterministic release archive after building the UI:
 
 ```sh
 python3 studio/packaging/build_release.py \
-  --version 0.4.0 --target linux-x86_64 --output-dir dist
+  --version 0.4.1 --target linux-x86_64 --output-dir dist
 ```
 
 The builder has an explicit allow-list. It packages only the new backend,
