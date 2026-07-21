@@ -227,10 +227,19 @@ else
         /bin/bash --noprofile --rcfile "$OPT_OUT_HOME/.bashrc" -ic \
         'COMP_WORDS=(mocap-studio upd); COMP_CWORD=1; _mocap_studio_complete; [[ ${COMPREPLY[*]} == update ]]'
 fi
-env -u SHELL HOME="$OPT_OUT_HOME" "$OPT_OUT_COMMAND" completion install \
-    >"$SMOKE_ROOT/completion-without-shell.log"
-grep -Fq "Run 'mocap-studio help completion'" \
-    "$SMOKE_ROOT/completion-without-shell.log"
+COMPLETION_WITHOUT_SHELL_LOG=$SMOKE_ROOT/completion-without-shell.log
+if ! env -u SHELL HOME="$OPT_OUT_HOME" "$OPT_OUT_COMMAND" completion install \
+    >"$COMPLETION_WITHOUT_SHELL_LOG" 2>&1; then
+    printf '%s\n' 'Completion repair with SHELL unset failed:' >&2
+    sed -n '1,80p' "$COMPLETION_WITHOUT_SHELL_LOG" >&2
+    exit 1
+fi
+if ! grep -Fq "Run 'mocap-studio help completion'" \
+    "$COMPLETION_WITHOUT_SHELL_LOG"; then
+    printf '%s\n' 'Completion help fallback with SHELL unset was missing:' >&2
+    sed -n '1,80p' "$COMPLETION_WITHOUT_SHELL_LOG" >&2
+    exit 1
+fi
 HOME=$OPT_OUT_HOME SHELL=$SHELL ./install.sh --uninstall --yes --no-modify-path
 
 # Desktop integration may be explicitly disabled without affecting the CLI.
