@@ -234,8 +234,8 @@ if ! env -u SHELL HOME="$OPT_OUT_HOME" "$OPT_OUT_COMMAND" completion install \
     sed -n '1,80p' "$COMPLETION_WITHOUT_SHELL_LOG" >&2
     exit 1
 fi
-# Some /bin/sh implementations populate SHELL even when env removed it. In
-# that case the exact activation command is more useful than the fallback.
+# macOS /bin/sh may populate SHELL even when env removed it. In that case the
+# exact activation command is more useful than the fallback.
 if grep -Fq "Run 'mocap-studio help completion'" "$COMPLETION_WITHOUT_SHELL_LOG"; then
     :
 elif grep -Fq 'To enable it in this Bash session now:' "$COMPLETION_WITHOUT_SHELL_LOG" \
