@@ -118,7 +118,7 @@ class RemoteInstallerRoutingTests(unittest.TestCase):
         cls.asset_name = f"mocap-studio-{cls.version}-{cls.target}.tar.gz"
         cls.bundle_temporary = tempfile.TemporaryDirectory()
         cls.bundle_dir = Path(cls.bundle_temporary.name)
-        subprocess.run(
+        bundle = subprocess.run(
             [
                 sys.executable,
                 str(ROOT / "studio/packaging/build_release.py"),
@@ -132,10 +132,16 @@ class RemoteInstallerRoutingTests(unittest.TestCase):
                 str(cls.bundle_dir),
             ],
             cwd=ROOT,
-            check=True,
             capture_output=True,
             text=True,
+            check=False,
         )
+        if bundle.returncode != 0:
+            raise AssertionError(
+                "could not build the current remote-installer fixture:\n"
+                f"stdout:\n{bundle.stdout}\n"
+                f"stderr:\n{bundle.stderr}"
+            )
         cls.archive = cls.bundle_dir / cls.asset_name
         cls.checksum = cls.bundle_dir / f"{cls.asset_name}.sha256"
         cls.previous_version = "0.0.1"
