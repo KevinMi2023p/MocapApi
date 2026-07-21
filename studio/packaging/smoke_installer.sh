@@ -173,21 +173,21 @@ HOME=$OPT_OUT_HOME SHELL=$SHELL ./install.sh --local "$REPOSITORY_ROOT" --no-mod
 [ ! -e "$OPT_OUT_HOME/.bashrc" ]
 [ ! -e "$OPT_OUT_HOME/.profile" ]
 OPT_OUT_COMMAND=$OPT_OUT_HOME/.local/bin/mocap-studio
-OPT_OUT_COMMAND_DIR=$(CDPATH= cd -P "$(dirname "$OPT_OUT_COMMAND")" 2>/dev/null && pwd)
-CANONICAL_OPT_OUT_COMMAND=$OPT_OUT_COMMAND_DIR/$(basename "$OPT_OUT_COMMAND")
 HOME=$OPT_OUT_HOME SHELL=$SHELL MOCAP_STUDIO_NO_MODIFY_PATH=1 \
     "$OPT_OUT_COMMAND" completion install \
     >"$SMOKE_ROOT/completion-repair.log"
 grep -Fq 'Shell completion is installed.' "$SMOKE_ROOT/completion-repair.log"
 if [ "$(uname -s)" = Darwin ]; then
-    grep -Fq "source <($CANONICAL_OPT_OUT_COMMAND completion zsh)" \
+    grep -Fq 'To enable it in this Zsh session now:' \
         "$SMOKE_ROOT/completion-repair.log"
+    grep -Eq '^  source <\(.+ completion zsh\)$' "$SMOKE_ROOT/completion-repair.log"
     [ -f "$OPT_OUT_HOME/.zshrc" ]
     env -i HOME="$OPT_OUT_HOME" SHELL=/bin/zsh PATH=/usr/bin:/bin \
         /bin/zsh -ic '[[ ${_comps[mocap-studio]} == _mocap_studio ]]'
 else
-    grep -Fq "source <($CANONICAL_OPT_OUT_COMMAND completion bash)" \
+    grep -Fq 'To enable it in this Bash session now:' \
         "$SMOKE_ROOT/completion-repair.log"
+    grep -Eq '^  source <\(.+ completion bash\)$' "$SMOKE_ROOT/completion-repair.log"
     [ -f "$OPT_OUT_HOME/.bashrc" ]
     env -i HOME="$OPT_OUT_HOME" SHELL=/bin/bash PATH=/usr/bin:/bin \
         /bin/bash --noprofile --rcfile "$OPT_OUT_HOME/.bashrc" -ic \
