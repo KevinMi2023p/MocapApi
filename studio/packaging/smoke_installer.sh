@@ -173,29 +173,56 @@ HOME=$OPT_OUT_HOME SHELL=$SHELL ./install.sh --local "$REPOSITORY_ROOT" --no-mod
 [ ! -e "$OPT_OUT_HOME/.bashrc" ]
 [ ! -e "$OPT_OUT_HOME/.profile" ]
 OPT_OUT_COMMAND=$OPT_OUT_HOME/.local/bin/mocap-studio
-HOME=$OPT_OUT_HOME SHELL=$SHELL MOCAP_STUDIO_NO_MODIFY_PATH=1 \
-    "$OPT_OUT_COMMAND" completion install \
-    >"$SMOKE_ROOT/completion-repair.log"
-grep -Fq 'Shell completion is installed.' "$SMOKE_ROOT/completion-repair.log"
+COMPLETION_REPAIR_LOG=$SMOKE_ROOT/completion-repair.log
+if ! HOME=$OPT_OUT_HOME SHELL=$SHELL MOCAP_STUDIO_NO_MODIFY_PATH=1 \
+    "$OPT_OUT_COMMAND" completion install >"$COMPLETION_REPAIR_LOG" 2>&1; then
+    printf '%s\n' 'Completion repair command failed:' >&2
+    sed -n '1,80p' "$COMPLETION_REPAIR_LOG" >&2
+    exit 1
+fi
+if ! grep -Fq 'Shell completion is installed.' "$COMPLETION_REPAIR_LOG"; then
+    printf '%s\n' 'Completion repair success message was missing:' >&2
+    sed -n '1,80p' "$COMPLETION_REPAIR_LOG" >&2
+    exit 1
+fi
 if [ "$(uname -s)" = Darwin ]; then
-    grep -Fq 'To enable it in this Zsh session now:' \
-        "$SMOKE_ROOT/completion-repair.log"
-    grep -Eq '^  source <\(.+ completion zsh\)$' "$SMOKE_ROOT/completion-repair.log"
-    [ -f "$OPT_OUT_HOME/.zshrc" ]
+    if ! grep -Fq 'To enable it in this Zsh session now:' \
+        "$COMPLETION_REPAIR_LOG" \
+        || ! grep -Eq '^  source <\(.+ completion zsh\)$' "$COMPLETION_REPAIR_LOG"; then
+        printf '%s\n' 'Zsh activation hint was missing or malformed:' >&2
+        sed -n '1,80p' "$COMPLETION_REPAIR_LOG" >&2
+        exit 1
+    fi
+    if [ ! -f "$OPT_OUT_HOME/.zshrc" ]; then
+        printf 'Completion repair did not create %s\n' "$OPT_OUT_HOME/.zshrc" >&2
+        sed -n '1,80p' "$COMPLETION_REPAIR_LOG" >&2
+        exit 1
+    fi
     # compinit may retain the file's #compdef autoload name, while direct
     # sourcing registers the implementation function. Both routes are valid.
-    env -i HOME="$OPT_OUT_HOME" SHELL=/bin/zsh PATH=/usr/bin:/bin \
+    if ! env -i HOME="$OPT_OUT_HOME" SHELL=/bin/zsh PATH=/usr/bin:/bin \
         /bin/zsh -ic '
             case ${_comps[mocap-studio]-} in
                 _mocap_studio|_mocap-studio) ;;
                 *) print -u2 -r -- "unexpected Mocap Studio completion: ${_comps[mocap-studio]-missing}"; exit 1 ;;
             esac
-        '
+        '; then
+        printf '%s\n' 'Zsh did not register Mocap Studio completion; startup file:' >&2
+        sed -n '1,120p' "$OPT_OUT_HOME/.zshrc" >&2
+        exit 1
+    fi
 else
-    grep -Fq 'To enable it in this Bash session now:' \
-        "$SMOKE_ROOT/completion-repair.log"
-    grep -Eq '^  source <\(.+ completion bash\)$' "$SMOKE_ROOT/completion-repair.log"
-    [ -f "$OPT_OUT_HOME/.bashrc" ]
+    if ! grep -Fq 'To enable it in this Bash session now:' \
+        "$COMPLETION_REPAIR_LOG" \
+        || ! grep -Eq '^  source <\(.+ completion bash\)$' "$COMPLETION_REPAIR_LOG"; then
+        printf '%s\n' 'Bash activation hint was missing or malformed:' >&2
+        sed -n '1,80p' "$COMPLETION_REPAIR_LOG" >&2
+        exit 1
+    fi
+    [ -f "$OPT_OUT_HOME/.bashrc" ] || {
+        printf 'Completion repair did not create %s\n' "$OPT_OUT_HOME/.bashrc" >&2
+        exit 1
+    }
     env -i HOME="$OPT_OUT_HOME" SHELL=/bin/bash PATH=/usr/bin:/bin \
         /bin/bash --noprofile --rcfile "$OPT_OUT_HOME/.bashrc" -ic \
         'COMP_WORDS=(mocap-studio upd); COMP_CWORD=1; _mocap_studio_complete; [[ ${COMPREPLY[*]} == update ]]'
