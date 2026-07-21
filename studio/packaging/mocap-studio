@@ -161,6 +161,10 @@ run_management_command() {
     MOCAP_STUDIO_CLI_CONTEXT=$MANAGEMENT_CONTEXT
     export MOCAP_STUDIO_CLI_CONTEXT
     if [ "$MANAGEMENT_OPERATION" = completion ]; then
+        # Running `completion install` is an explicit request to repair shell
+        # registration, even when the general installer opt-out is exported.
+        MOCAP_STUDIO_NO_MODIFY_PATH=0
+        export MOCAP_STUDIO_NO_MODIFY_PATH
         exec "$INSTALLER" "$MANAGEMENT_FLAG" "$@" \
             --data-home "$INSTALL_APP_HOME" \
             --bin-dir "$COMMAND_BIN_DIR"

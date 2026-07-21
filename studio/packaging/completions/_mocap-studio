@@ -121,6 +121,15 @@ _mocap_studio() {
     esac
 }
 
-if (( $+functions[compdef] )); then
+if [[ ${funcstack[1]-} == _mocap-studio ]]; then
+    # When compinit discovers this file through fpath, it first invokes an
+    # autoload stub named after the file. Generate candidates during that same
+    # first Tab press instead of only registering the implementation for the
+    # next one.
+    _mocap_studio "$@"
+else
+    if (( ! $+functions[compdef] )); then
+        autoload -Uz compinit && compinit
+    fi
     compdef _mocap_studio mocap-studio
 fi

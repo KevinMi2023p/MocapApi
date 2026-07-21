@@ -631,6 +631,68 @@ class RemoteInstallerRoutingTests(unittest.TestCase):
             for completion_file in self.completion_files(home):
                 self.assertFalse(completion_file.exists(), completion_file)
 
+    def test_lower_level_update_does_not_promote_a_saved_profile_opt_out(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home, _log_path, environment = self.mock_environment(root)
+            environment["SHELL"] = "/bin/bash"
+            command = home / ".local" / "bin" / "mocap-studio"
+            app_home = self.application_home(home)
+            initial = subprocess.run(
+                [
+                    "/bin/sh",
+                    str(ROOT / "install.sh"),
+                    "--version",
+                    self.previous_version,
+                    "--no-modify-path",
+                    "--no-desktop-integration",
+                ],
+                cwd=ROOT,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(initial.returncode, 0, initial.stderr)
+            state_file = (
+                app_home / "completions" / ".mocap-studio-integration.json"
+            )
+            self.assertIsNone(
+                json.loads(state_file.read_text(encoding="utf-8"))["profile"]
+            )
+
+            update = subprocess.run(
+                [
+                    "/bin/sh",
+                    str(ROOT / "install.sh"),
+                    "--update",
+                    "--data-home",
+                    str(app_home),
+                    "--bin-dir",
+                    str(command.parent),
+                    "--no-desktop-integration",
+                ],
+                cwd=ROOT,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(update.returncode, 0, update.stderr)
+            self.assertIsNone(
+                json.loads(state_file.read_text(encoding="utf-8"))["profile"]
+            )
+            self.assertFalse((home / ".bashrc").exists())
+
+            uninstall = subprocess.run(
+                [str(command), "uninstall", "--yes"],
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(uninstall.returncode, 0, uninstall.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

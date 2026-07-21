@@ -46,6 +46,7 @@ class CompletionIntegrationTests(unittest.TestCase):
         shell: str = "/bin/bash",
         zdotdir: Path | None = None,
         modify_profile: bool = False,
+        repair_profile: bool = False,
     ) -> list[str]:
         result = [
             operation,
@@ -66,6 +67,8 @@ class CompletionIntegrationTests(unittest.TestCase):
             result.extend(("--zdotdir", str(zdotdir)))
         if modify_profile:
             result.append("--modify-profile")
+        if repair_profile:
+            result.append("--repair-profile")
         return result
 
     def invoke(self, arguments: list[str]) -> tuple[int, str, str]:
@@ -180,6 +183,85 @@ class CompletionIntegrationTests(unittest.TestCase):
             self.assertFalse(changed_config.exists())
             self.assertFalse((root / "changed zsh config").exists())
 
+    def test_explicit_install_repairs_a_saved_profile_opt_out(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app_home = root / "application data" / "mocap-studio"
+            home = root / "home"
+            data_home = root / "data"
+            config_home = root / "config"
+            install_dir = self.create_install(app_home, "v1")
+            opted_out_args = self.arguments(
+                "install",
+                app_home=app_home,
+                install_dir=install_dir,
+                home=home,
+                xdg_data_home=data_home,
+                xdg_config_home=config_home,
+                modify_profile=False,
+            )
+
+            self.assertEqual(self.invoke(opted_out_args)[0], 0)
+            state_file = (
+                app_home
+                / "completions"
+                / completion_integration.STATE_FILENAME
+            )
+            self.assertIsNone(
+                json.loads(state_file.read_text(encoding="utf-8"))["profile"]
+            )
+            self.assertFalse((home / ".bashrc").exists())
+
+            normal_update_args = self.arguments(
+                "install",
+                app_home=app_home,
+                install_dir=install_dir,
+                home=home,
+                xdg_data_home=data_home,
+                xdg_config_home=config_home,
+                modify_profile=True,
+                repair_profile=False,
+            )
+            self.assertEqual(self.invoke(normal_update_args)[0], 0)
+            self.assertIsNone(
+                json.loads(state_file.read_text(encoding="utf-8"))["profile"]
+            )
+            self.assertFalse((home / ".bashrc").exists())
+
+            repair_args = self.arguments(
+                "install",
+                app_home=app_home,
+                install_dir=install_dir,
+                home=home,
+                xdg_data_home=root / "different data",
+                xdg_config_home=root / "different config",
+                modify_profile=True,
+                repair_profile=True,
+            )
+            self.assertEqual(self.invoke(repair_args)[0], 0)
+            self.assertEqual(self.invoke(repair_args)[0], 0)
+
+            profile = home / ".bashrc"
+            profile_content = profile.read_text(encoding="utf-8")
+            self.assertEqual(
+                profile_content.count(completion_integration.BLOCK_START), 1
+            )
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            self.assertEqual(state["profile"], str(profile))
+            self.assertEqual(state["profile_shell"], "bash")
+            self.assertEqual(
+                state["bash"],
+                str(data_home / "bash-completion" / "completions" / "mocap-studio"),
+            )
+
+            uninstall_args = repair_args.copy()
+            uninstall_args[0] = "uninstall"
+            self.assertEqual(self.invoke(uninstall_args)[0], 0)
+            self.assertNotIn(
+                completion_integration.BLOCK_START,
+                profile.read_text(encoding="utf-8"),
+            )
+
     def test_bash_and_zsh_profile_blocks_are_idempotent_and_removed(self) -> None:
         for shell in ("bash", "zsh"):
             with self.subTest(shell=shell), tempfile.TemporaryDirectory() as temporary:
@@ -235,6 +317,86 @@ class CompletionIntegrationTests(unittest.TestCase):
                         / completion_integration.STATE_FILENAME
                     ).exists()
                 )
+
+    def test_explicit_repair_migrates_registration_after_shell_change(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app_home = root / "app" / "mocap-studio"
+            home = root / "home"
+            data_home = root / "data"
+            config_home = root / "config"
+            zsh_config = root / "zsh configuration"
+            install_dir = self.create_install(app_home, "v1")
+            bash_args = self.arguments(
+                "install",
+                app_home=app_home,
+                install_dir=install_dir,
+                home=home,
+                xdg_data_home=data_home,
+                xdg_config_home=config_home,
+                shell="/bin/bash",
+                modify_profile=True,
+            )
+            self.assertEqual(self.invoke(bash_args)[0], 0)
+            bash_profile = home / ".bashrc"
+            self.assertIn(
+                completion_integration.BLOCK_START,
+                bash_profile.read_text(encoding="utf-8"),
+            )
+
+            normal_zsh_update = self.arguments(
+                "install",
+                app_home=app_home,
+                install_dir=install_dir,
+                home=home,
+                xdg_data_home=data_home,
+                xdg_config_home=config_home,
+                shell="/bin/zsh",
+                zdotdir=zsh_config,
+                modify_profile=True,
+                repair_profile=False,
+            )
+            self.assertEqual(self.invoke(normal_zsh_update)[0], 0)
+            self.assertFalse((zsh_config / ".zshrc").exists())
+
+            repair_args = self.arguments(
+                "install",
+                app_home=app_home,
+                install_dir=install_dir,
+                home=home,
+                xdg_data_home=data_home,
+                xdg_config_home=config_home,
+                shell="/bin/zsh",
+                zdotdir=zsh_config,
+                modify_profile=True,
+                repair_profile=True,
+            )
+            self.assertEqual(self.invoke(repair_args)[0], 0)
+            self.assertNotIn(
+                completion_integration.BLOCK_START,
+                bash_profile.read_text(encoding="utf-8"),
+            )
+            zsh_profile = zsh_config / ".zshrc"
+            self.assertIn(
+                completion_integration.BLOCK_START,
+                zsh_profile.read_text(encoding="utf-8"),
+            )
+            state_file = (
+                app_home
+                / "completions"
+                / completion_integration.STATE_FILENAME
+            )
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            self.assertEqual(state["profile"], str(zsh_profile))
+            self.assertEqual(state["profile_shell"], "zsh")
+
+            uninstall_args = repair_args.copy()
+            uninstall_args[0] = "uninstall"
+            self.assertEqual(self.invoke(uninstall_args)[0], 0)
+            self.assertNotIn(
+                completion_integration.BLOCK_START,
+                zsh_profile.read_text(encoding="utf-8"),
+            )
 
     def test_unmanaged_target_collision_is_preserved_and_prevents_install(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

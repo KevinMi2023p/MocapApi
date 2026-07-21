@@ -172,6 +172,29 @@ HOME=$OPT_OUT_HOME SHELL=$SHELL ./install.sh --local "$REPOSITORY_ROOT" --no-mod
 [ ! -e "$OPT_OUT_HOME/.zprofile" ]
 [ ! -e "$OPT_OUT_HOME/.bashrc" ]
 [ ! -e "$OPT_OUT_HOME/.profile" ]
+OPT_OUT_COMMAND=$OPT_OUT_HOME/.local/bin/mocap-studio
+HOME=$OPT_OUT_HOME SHELL=$SHELL MOCAP_STUDIO_NO_MODIFY_PATH=1 \
+    "$OPT_OUT_COMMAND" completion install \
+    >"$SMOKE_ROOT/completion-repair.log"
+grep -Fq 'Shell completion is installed.' "$SMOKE_ROOT/completion-repair.log"
+if [ "$(uname -s)" = Darwin ]; then
+    grep -Fq "source <($OPT_OUT_COMMAND completion zsh)" \
+        "$SMOKE_ROOT/completion-repair.log"
+    [ -f "$OPT_OUT_HOME/.zshrc" ]
+    env -i HOME="$OPT_OUT_HOME" SHELL=/bin/zsh PATH=/usr/bin:/bin \
+        /bin/zsh -ic '[[ ${_comps[mocap-studio]} == _mocap_studio ]]'
+else
+    grep -Fq "source <($OPT_OUT_COMMAND completion bash)" \
+        "$SMOKE_ROOT/completion-repair.log"
+    [ -f "$OPT_OUT_HOME/.bashrc" ]
+    env -i HOME="$OPT_OUT_HOME" SHELL=/bin/bash PATH=/usr/bin:/bin \
+        /bin/bash --noprofile --rcfile "$OPT_OUT_HOME/.bashrc" -ic \
+        'COMP_WORDS=(mocap-studio upd); COMP_CWORD=1; _mocap_studio_complete; [[ ${COMPREPLY[*]} == update ]]'
+fi
+env -u SHELL HOME="$OPT_OUT_HOME" "$OPT_OUT_COMMAND" completion install \
+    >"$SMOKE_ROOT/completion-without-shell.log"
+grep -Fq "Run 'mocap-studio help completion'" \
+    "$SMOKE_ROOT/completion-without-shell.log"
 HOME=$OPT_OUT_HOME SHELL=$SHELL ./install.sh --uninstall --yes --no-modify-path
 
 # Desktop integration may be explicitly disabled without affecting the CLI.

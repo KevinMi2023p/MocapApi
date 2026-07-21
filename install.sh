@@ -427,6 +427,34 @@ run_completion_helper() {
         "$@"
 }
 
+print_completion_activation_hint() {
+    COMPLETION_HINT_PYTHON=$1
+    QUOTED_COMPLETION_COMMAND=$(
+        "$COMPLETION_HINT_PYTHON" -c \
+            'import shlex, sys; print(shlex.quote(sys.argv[1]))' \
+        "$COMMAND_PATH"
+    ) || QUOTED_COMPLETION_COMMAND=mocap-studio
+    COMPLETION_HINT_SHELL=${SHELL:-}
+    case ${COMPLETION_HINT_SHELL##*/} in
+        bash)
+            printf '%s\n' 'To enable it in this Bash session now:'
+            printf '  source <(%s completion bash)\n' "$QUOTED_COMPLETION_COMMAND"
+            ;;
+        zsh)
+            printf '%s\n' 'To enable it in this Zsh session now:'
+            printf '  source <(%s completion zsh)\n' "$QUOTED_COMPLETION_COMMAND"
+            ;;
+        fish)
+            printf '%s\n' 'To enable it in this Fish session now:'
+            printf '  %s completion fish | source\n' "$QUOTED_COMPLETION_COMMAND"
+            ;;
+        *)
+            printf '%s\n' \
+                "Run 'mocap-studio help completion' for current-shell activation commands."
+            ;;
+    esac
+}
+
 append_posix_path_block() {
     PROFILE_PATH=$1
     PROFILE_PARENT=$(dirname "$PROFILE_PATH")
@@ -595,11 +623,14 @@ if [ "$OPERATION" = completion ]; then
     fi
     run_completion_helper check "$COMPLETION_HELPER" "$MANAGED_INSTALL_DIR" \
         "$COMPLETION_PYTHON" ${COMPLETION_PROFILE_OPTION:+"$COMPLETION_PROFILE_OPTION"} \
+        --repair-profile \
         || die "shell completion paths are occupied or unsafe"
     run_completion_helper install "$COMPLETION_HELPER" "$MANAGED_INSTALL_DIR" \
         "$COMPLETION_PYTHON" ${COMPLETION_PROFILE_OPTION:+"$COMPLETION_PROFILE_OPTION"} \
+        --repair-profile \
         || die "shell completion could not be installed"
-    printf '%s\n' 'Shell completion is installed. Open a new terminal to use it.'
+    printf '%s\n' 'Shell completion is installed.'
+    print_completion_activation_hint "$COMPLETION_PYTHON"
     exit 0
 fi
 

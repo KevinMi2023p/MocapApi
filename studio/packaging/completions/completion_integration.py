@@ -38,6 +38,8 @@ class CompletionPaths:
     fish: Path
     profile: Path | None
     profile_shell: str | None
+    previous_profile: Path | None
+    previous_profile_shell: str | None
 
 
 def absolute_path(raw: str, label: str) -> Path:
@@ -115,6 +117,21 @@ def load_state(state_file: Path, owner: str) -> dict[str, object] | None:
     return payload
 
 
+def requested_profile(
+    args: argparse.Namespace, home: Path
+) -> tuple[Path | None, str | None]:
+    if not args.modify_profile:
+        return None, None
+
+    shell_name = Path(args.shell).name
+    if shell_name == "bash":
+        return shell_profile_path(home / ".bashrc"), "bash"
+    if shell_name == "zsh":
+        zdotdir = optional_absolute(args.zdotdir, home, "Zsh configuration home")
+        return shell_profile_path(zdotdir / ".zshrc"), "zsh"
+    return None, None
+
+
 def completion_paths(args: argparse.Namespace) -> CompletionPaths:
     home = absolute_path(args.home, "home")
     app_home = absolute_path(args.app_home, "application home")
@@ -128,6 +145,23 @@ def completion_paths(args: argparse.Namespace) -> CompletionPaths:
             if saved["profile"] is not None
             else None
         )
+        profile_shell = (
+            str(saved["profile_shell"]) if profile is not None else None
+        )
+        previous_profile: Path | None = None
+        previous_profile_shell: str | None = None
+        # Normal updates deliberately reuse the saved opt-out. Only an
+        # explicit `mocap-studio completion install` passes repair_profile and
+        # may promote an old profile-less state or migrate registration after
+        # the user changes their login shell.
+        if args.modify_profile and args.repair_profile:
+            requested, requested_shell = requested_profile(args, home)
+            if profile is None:
+                profile, profile_shell = requested, requested_shell
+            elif requested is not None and requested_shell != profile_shell:
+                previous_profile = profile
+                previous_profile_shell = profile_shell
+                profile, profile_shell = requested, requested_shell
         return CompletionPaths(
             app_home=app_home,
             install_dir=install_dir,
@@ -137,7 +171,9 @@ def completion_paths(args: argparse.Namespace) -> CompletionPaths:
             zsh=absolute_path(str(saved["zsh"]), "saved Zsh completion"),
             fish=absolute_path(str(saved["fish"]), "saved Fish completion"),
             profile=profile,
-            profile_shell=str(saved["profile_shell"]) if profile is not None else None,
+            profile_shell=profile_shell,
+            previous_profile=previous_profile,
+            previous_profile_shell=previous_profile_shell,
         )
 
     data_home = optional_absolute(
@@ -153,17 +189,7 @@ def completion_paths(args: argparse.Namespace) -> CompletionPaths:
     else:
         bash_directory = data_home / "bash-completion" / "completions"
 
-    profile: Path | None = None
-    profile_shell: str | None = None
-    if args.modify_profile:
-        shell_name = Path(args.shell).name
-        if shell_name == "bash":
-            profile = shell_profile_path(home / ".bashrc")
-            profile_shell = "bash"
-        elif shell_name == "zsh":
-            zdotdir = optional_absolute(args.zdotdir, home, "Zsh configuration home")
-            profile = shell_profile_path(zdotdir / ".zshrc")
-            profile_shell = "zsh"
+    profile, profile_shell = requested_profile(args, home)
 
     return CompletionPaths(
         app_home=app_home,
@@ -175,6 +201,8 @@ def completion_paths(args: argparse.Namespace) -> CompletionPaths:
         fish=config_home / "fish" / "completions" / "mocap-studio.fish",
         profile=profile,
         profile_shell=profile_shell,
+        previous_profile=None,
+        previous_profile_shell=None,
     )
 
 
@@ -211,11 +239,12 @@ def managed_content(paths: CompletionPaths, shell: str) -> str:
     return marker + content
 
 
-def profile_block(paths: CompletionPaths) -> str:
-    assert paths.profile is not None and paths.profile_shell is not None
-    target = paths.bash if paths.profile_shell == "bash" else paths.zsh
+def profile_block(paths: CompletionPaths, profile_shell: str | None = None) -> str:
+    selected_shell = profile_shell or paths.profile_shell
+    assert selected_shell is not None
+    target = paths.bash if selected_shell == "bash" else paths.zsh
     quoted = shlex.quote(str(target))
-    if paths.profile_shell == "bash":
+    if selected_shell == "bash":
         body = f"if [ -r {quoted} ]; then\n    . {quoted}\nfi\n"
     else:
         body = (
@@ -245,19 +274,22 @@ def read_profile(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def check_profile(paths: CompletionPaths) -> None:
-    if paths.profile is None:
+def check_profile_path(
+    paths: CompletionPaths, profile: Path | None, profile_shell: str | None
+) -> None:
+    if profile is None:
         return
-    content = read_profile(paths.profile)
+    assert profile_shell is not None
+    content = read_profile(profile)
     start_count = content.count(BLOCK_START)
     end_count = content.count(BLOCK_END)
     if start_count == 0 and end_count == 0:
         return
-    block = profile_block(paths)
+    block = profile_block(paths, profile_shell)
     if start_count == 1 and end_count == 1 and block in content:
         return
     raise CompletionIntegrationError(
-        f"shell profile contains an unmanaged or incomplete completion block: {paths.profile}"
+        f"shell profile contains an unmanaged or incomplete completion block: {profile}"
     )
 
 
@@ -267,7 +299,10 @@ def check(paths: CompletionPaths) -> None:
             raise CompletionIntegrationError(
                 f"{shell} completion path already exists and is not owned by this installation: {target}"
             )
-    check_profile(paths)
+    check_profile_path(paths, paths.profile, paths.profile_shell)
+    check_profile_path(
+        paths, paths.previous_profile, paths.previous_profile_shell
+    )
     for shell in ("bash", "zsh", "fish"):
         managed_content(paths, shell)
 
@@ -321,6 +356,14 @@ def install(paths: CompletionPaths) -> None:
             mode = paths.profile.stat().st_mode & 0o777 if paths.profile.exists() else 0o644
             atomic_write(paths.profile, content, mode)
         print(f"Completion startup file: {paths.profile}")
+    if paths.previous_profile is not None:
+        assert paths.previous_profile_shell is not None
+        if not remove_profile_block(
+            paths, paths.previous_profile, paths.previous_profile_shell
+        ):
+            raise CompletionIntegrationError(
+                f"previous shell profile changed during migration: {paths.previous_profile}"
+            )
     write_state(paths)
 
 
@@ -334,26 +377,38 @@ def remove_owned(path: Path, owner: str, label: str) -> bool:
     return False
 
 
+def remove_profile_block(
+    paths: CompletionPaths, profile: Path, profile_shell: str
+) -> bool:
+    if not lexists(profile):
+        return True
+    try:
+        content = read_profile(profile)
+        block = profile_block(paths, profile_shell)
+        if block in content:
+            mode = profile.stat().st_mode & 0o777
+            atomic_write(profile, content.replace(block, "", 1), mode)
+        elif BLOCK_START in content or BLOCK_END in content:
+            print(
+                f"shell completion: preserving modified profile block in {profile}",
+                file=sys.stderr,
+            )
+            return False
+    except CompletionIntegrationError as error:
+        print(f"shell completion: {error}", file=sys.stderr)
+        return False
+    return True
+
+
 def uninstall(paths: CompletionPaths) -> None:
     removed = True
     for label, target in (("Bash completion", paths.bash), ("Zsh completion", paths.zsh), ("Fish completion", paths.fish)):
         removed = remove_owned(target, paths.owner, label) and removed
-    if paths.profile is not None and lexists(paths.profile):
-        try:
-            content = read_profile(paths.profile)
-            block = profile_block(paths)
-            if block in content:
-                mode = paths.profile.stat().st_mode & 0o777
-                atomic_write(paths.profile, content.replace(block, "", 1), mode)
-            elif BLOCK_START in content or BLOCK_END in content:
-                print(
-                    f"shell completion: preserving modified profile block in {paths.profile}",
-                    file=sys.stderr,
-                )
-                removed = False
-        except CompletionIntegrationError as error:
-            print(f"shell completion: {error}", file=sys.stderr)
-            removed = False
+    if paths.profile is not None and paths.profile_shell is not None:
+        removed = (
+            remove_profile_block(paths, paths.profile, paths.profile_shell)
+            and removed
+        )
     if removed and lexists(paths.state_file):
         paths.state_file.unlink()
         try:
@@ -374,6 +429,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--bash-completion-user-dir", default="")
     result.add_argument("--zdotdir", default="")
     result.add_argument("--modify-profile", action="store_true")
+    result.add_argument("--repair-profile", action="store_true")
     return result
 
 

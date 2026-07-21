@@ -98,6 +98,58 @@ class ShellCompletionAssetTests(unittest.TestCase):
                 checked.add(shell)
         self.assertIn("bash", checked)
 
+    def test_zsh_fpath_autoload_completes_on_the_first_invocation(self) -> None:
+        zsh = shutil.which("zsh")
+        if zsh is None:
+            self.skipTest("zsh is not installed")
+        completion_dir = shlex.quote(str(COMPLETION_DIR))
+        script = f"""
+fpath=({completion_dir} $fpath)
+autoload -Uz _mocap-studio
+_describe() {{
+    local array_name=$2 value candidate
+    for value in "${{(@P)array_name}}"; do
+        candidate=${{value%%:*}}
+        [[ $candidate == ${{words[CURRENT]}}* ]] && print -r -- "$candidate"
+    done
+}}
+_directories() {{ :; }}
+_message() {{ :; }}
+words=(mocap-studio upd)
+CURRENT=2
+_mocap-studio
+"""
+        result = subprocess.run(
+            [zsh, "-f", "-c", script],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["update"])
+
+    def test_fish_prefix_completion_when_fish_is_available(self) -> None:
+        fish = shutil.which("fish")
+        if fish is None:
+            self.skipTest("fish is not installed")
+        result = subprocess.run(
+            [
+                fish,
+                "-C",
+                f"source {shlex.quote(str(ASSETS['fish']))}",
+                "-c",
+                'complete -C "mocap-studio upd"',
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            [line.split("\t", 1)[0] for line in result.stdout.splitlines()],
+            ["update"],
+        )
+
 
 class BashCompletionBehaviorTests(unittest.TestCase):
     def complete(self, words: list[str], *, cwd: Path | None = None) -> list[str]:
@@ -149,6 +201,10 @@ fi
         )
 
     def test_prefix_filtering_and_option_values(self) -> None:
+        self.assert_candidates(["mocap-studio", "upd"], {"update"})
+        self.assert_candidates(
+            ["mocap-studio", "u"], {"update", "uninstall"}
+        )
         self.assert_candidates(
             ["mocap-studio", "--re"], {"--reuse-existing"}
         )
