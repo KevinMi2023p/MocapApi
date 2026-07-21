@@ -114,6 +114,11 @@ QEMU/libvirt can attach a selected host USB device exclusively to a Windows
 guest. This lets Windows use its RNDIS driver and provides the closest behavior
 to a supported Axis installation.
 
+This architecture is automated in [`vm/`](../../vm/README.md):
+`setup-axis-vm.sh` provisions the Windows guest, `attach-usb.sh` handles
+VID/PID-exact USB passthrough, and `bridge/bvh_to_gr00t.py` forwards the
+resulting BVH stream to downstream consumers.
+
 Use all of the following safeguards:
 
 - identify the exact device by verified VID/PID or stable physical port;
