@@ -112,6 +112,7 @@ _describe() {{
         candidate=${{value%%:*}}
         [[ $candidate == ${{words[CURRENT]}}* ]] && print -r -- "$candidate"
     done
+    return 0
 }}
 _directories() {{ :; }}
 _message() {{ :; }}
