@@ -182,8 +182,15 @@ if [ "$(uname -s)" = Darwin ]; then
         "$SMOKE_ROOT/completion-repair.log"
     grep -Eq '^  source <\(.+ completion zsh\)$' "$SMOKE_ROOT/completion-repair.log"
     [ -f "$OPT_OUT_HOME/.zshrc" ]
+    # compinit may retain the file's #compdef autoload name, while direct
+    # sourcing registers the implementation function. Both routes are valid.
     env -i HOME="$OPT_OUT_HOME" SHELL=/bin/zsh PATH=/usr/bin:/bin \
-        /bin/zsh -ic '[[ ${_comps[mocap-studio]} == _mocap_studio ]]'
+        /bin/zsh -ic '
+            case ${_comps[mocap-studio]-} in
+                _mocap_studio|_mocap-studio) ;;
+                *) print -u2 -r -- "unexpected Mocap Studio completion: ${_comps[mocap-studio]-missing}"; exit 1 ;;
+            esac
+        '
 else
     grep -Fq 'To enable it in this Bash session now:' \
         "$SMOKE_ROOT/completion-repair.log"
