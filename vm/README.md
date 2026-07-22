@@ -35,6 +35,7 @@ open BVH/Calc network boundary is the only integration surface.
 | `setup-axis-vm.sh` | Installs QEMU/libvirt/OVMF/swtpm and provisions the Windows guest (UEFI, emulated TPM 2.0, virtio disk/net, xHCI USB controller) |
 | `attach-usb.sh` | Records the transceiver's exact VID:PID, attaches/detaches it to the guest, optional udev auto-attach on replug |
 | `bridge/bvh_to_gr00t.py` | Receives the BVH stream on the host and publishes wrist poses to gr00t's ROS2 ingestion topic; `--probe` mode verifies connectivity without ROS2 |
+| `windows/` | Guided Axis Studio install/login helper placed on the VM's `AXIS_SETUP` CD |
 
 ## Host requirements
 
@@ -51,7 +52,14 @@ open BVH/Calc network boundary is the only integration surface.
 ## 1. Provision the VM
 
 ```sh
+./setup-axis-vm.sh \
+    --windows-iso ~/Downloads/Win11_24H2_English_x64.iso \
+    --axis-installer ~/Downloads/AxisStudioSetup.msi
+
+# The Axis installer is optional; the guest helper opens Noitom's official
+# download and account pages when it is not supplied.
 ./setup-axis-vm.sh --windows-iso ~/Downloads/Win11_24H2_English_x64.iso
+
 # smaller/older stations:
 ./setup-axis-vm.sh --windows-iso ... --windows-version win10 --memory 6144
 ```
@@ -67,15 +75,32 @@ virt-viewer --connect qemu:///system axis-studio
 During Windows setup the virtio disk is invisible until you click *Load
 driver* and pick the second CD (`virtio-win`) → `amd64\win11` (or `win10`).
 After first boot, run `virtio-win-gt-x64.msi` from that CD to install the
-network and guest drivers.
+network and guest drivers. The setup script also attaches an `AXIS_SETUP` CD
+containing the guided Axis Studio setup helper. Pass `--skip-axis-media` only
+if you want to handle the entire Axis Studio installation yourself.
 
 ## 2. Install and activate Axis Studio (in the guest)
 
-Follow Noitom's manual: [Software Installation and Activation](https://support.noitom.com.cn/s/customer-manual-en/doc/1-software-installation-and-activation-yC49l3MCA2)
-(installer downloads: [neuronmocap.com support](https://support.neuronmocap.com/hc/en-us/articles/5497866781467-Installation)).
-Axis Studio V2.12+ ships as an *Online* or *Dongle* edition — pick the one
-matching your license. Activation needs guest internet access; the default
-libvirt NAT network provides it.
+After the virtio network driver is installed, open **This PC → AXIS_SETUP**
+and double-click `START-AXIS-SETUP.cmd`:
+
+- If `--axis-installer` was supplied, the helper launches that `.exe` or `.msi`
+  interactively. `.zip` packages are extracted first; a single installer is
+  launched, while an ambiguous bundle is opened for the operator to choose.
+- Otherwise it opens Noitom's
+  [installation guide](https://support.neuronmocap.com/hc/en-us/articles/5497866781467-Installation)
+  and [account portal](https://account.noitom.com/) so the operator can
+  download the edition assigned to the license.
+- For an online license, create or sign in to the account, click **Register**,
+  enter and verify the kit's Product ID, then launch the **Online** edition of
+  Axis Studio and sign in with the same email and password.
+
+Axis Studio V2.12+ ships as *Online* and *Dongle* editions; use the one matching
+the license. Legacy CodeMeter users must pass the Wibu dongle through to the
+guest. The helper deliberately never accepts or stores an email, password, or
+Product ID. Activation is machine-bound, so deactivate/unbind the old VM in
+the Noitom portal before rebuilding it. Guest internet access is provided by
+the default libvirt NAT network.
 
 **Graphics caveat:** Axis Studio wants OpenGL 4.4. The emulated QXL adapter
 does not provide that, so the 3D viewport may render poorly or fall back to
@@ -172,6 +197,9 @@ without mocap hardware, use `--body-control-device mock` first.
 | --- | --- |
 | `setup-axis-vm.sh` dies with "/dev/kvm missing" | Enable VT-x/AMD-V in firmware; on cloud instances use a bare-metal/nested-virt-capable host |
 | Windows installer sees no disk | *Load driver* from the virtio-win CD (`amd64\win11`) |
+| `AXIS_SETUP` CD is missing | Recreate the VM without `--skip-axis-media`; check `sudo virsh domblklist axis-studio` for the `axis-studio-axis-setup.iso` CD-ROM |
+| Axis helper opens a download page instead of installing | Recreate with `--axis-installer /path/to/AxisStudioSetup.msi` (also accepts `.exe`/`.zip`), or download the assigned edition inside the guest |
+| Online activation says the machine limit was reached | Unbind the retired VM under Software Activation in the Noitom account portal, then sign in again |
 | Transceiver absent in guest | `./attach-usb.sh status`; the VM must be running when you attach; replug + `attach` again (or `install-hotplug`) |
 | Sensors don't enumerate in Axis | RNDIS adapter must be `192.168.1.100/24` inside the guest and selected in Axis device settings |
 | `--probe` shows "no frames received" | Axis must unicast to `192.168.122.1:7012`; confirm with `sudo tcpdump -i virbr0 udp port 7012`; Windows Defender outbound is open by default, but third-party firewalls may not be |

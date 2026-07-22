@@ -12,6 +12,7 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 VM_NAME="axis-studio"
 WINDOWS_ISO=""
 WINDOWS_VERSION="win11"          # win10 | win11
@@ -20,6 +21,10 @@ VCPUS=4
 DISK_SIZE_GIB=120
 IMAGES_DIR="/var/lib/libvirt/images"
 VIRTIO_WIN_URL="https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso"
+AXIS_INSTALLER=""
+AXIS_MEDIA=1
+AXIS_GUEST_ASSETS_DIR="${SCRIPT_DIR}/windows"
+AXIS_MEDIA_STAGING=""
 DRY_RUN=0
 SKIP_PACKAGES=0
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/axis-vm"
@@ -40,13 +45,17 @@ Options:
   --vcpus N              Guest vCPUs (default: ${VCPUS})
   --disk-size GIB        Guest disk size in GiB, sparse (default: ${DISK_SIZE_GIB})
   --images-dir DIR       Where disk/ISOs live (default: ${IMAGES_DIR})
+  --axis-installer PATH  Put a downloaded Axis Studio .exe/.msi/.zip on the guest
+                         setup CD; without it, the CD opens Noitom's download page
+  --skip-axis-media      Do not create or attach the guided AXIS_SETUP CD
   --skip-packages        Do not apt-get install host packages
   --dry-run              Print the commands without executing them
   -h, --help             Show this help
 
-After Windows setup completes, continue with vm/README.md:
-Axis Studio install/activation, USB passthrough (attach-usb.sh), and
-BVH streaming configuration.
+After Windows setup, open the AXIS_SETUP CD in the guest and run
+START-AXIS-SETUP.cmd. It installs the supplied Axis Studio package (if any)
+and walks the user through account/Product-ID activation and login without
+collecting credentials. Continue with vm/README.md for USB passthrough and BVH.
 EOF
 }
 
@@ -62,15 +71,71 @@ run() {
     fi
 }
 
+cleanup_axis_media_staging() {
+    if [ -n "${AXIS_MEDIA_STAGING}" ] && [ -d "${AXIS_MEDIA_STAGING}" ]; then
+        rm -rf -- "${AXIS_MEDIA_STAGING}"
+    fi
+}
+trap cleanup_axis_media_staging EXIT
+
+build_axis_setup_media() {
+    local installer_name=""
+    local media_payload=""
+
+    if [ "${DRY_RUN}" -eq 1 ]; then
+        printf '\033[2m[dry-run]\033[0m build guided Axis Studio setup CD at %s' "${AXIS_SETUP_ISO}"
+        if [ -n "${AXIS_INSTALLER}" ]; then
+            printf ' with installer %s' "${AXIS_INSTALLER}"
+        fi
+        printf '\n'
+        return
+    fi
+
+    command -v xorriso >/dev/null || \
+        die "xorriso not found (install it, or rerun without --skip-packages)"
+    [ -r "${AXIS_GUEST_ASSETS_DIR}/START-AXIS-SETUP.cmd" ] || \
+        die "Guest setup assets missing from ${AXIS_GUEST_ASSETS_DIR}"
+    [ -r "${AXIS_GUEST_ASSETS_DIR}/README.txt" ] || \
+        die "Guest setup assets missing from ${AXIS_GUEST_ASSETS_DIR}"
+
+    AXIS_MEDIA_STAGING="$(mktemp -d -t axis-vm-media.XXXXXX)"
+    media_payload="${AXIS_MEDIA_STAGING}/payload"
+    mkdir "${media_payload}"
+    cp -- "${AXIS_GUEST_ASSETS_DIR}/START-AXIS-SETUP.cmd" "${media_payload}/"
+    cp -- "${AXIS_GUEST_ASSETS_DIR}/README.txt" "${media_payload}/"
+    if [ -n "${AXIS_INSTALLER}" ]; then
+        case "${AXIS_INSTALLER}" in
+            *.[eE][xX][eE]) installer_name="AxisStudioSetup.exe" ;;
+            *.[mM][sS][iI]) installer_name="AxisStudioSetup.msi" ;;
+            *.[zZ][iI][pP]) installer_name="AxisStudioSetup.zip" ;;
+        esac
+        cp -- "${AXIS_INSTALLER}" "${media_payload}/${installer_name}"
+    fi
+
+    log "Creating guided Axis Studio setup CD"
+    xorriso -as mkisofs -quiet -iso-level 3 -J -joliet-long -R \
+        -V AXIS_SETUP -o "${AXIS_MEDIA_STAGING}/axis-setup.iso" "${media_payload}"
+    sudo mkdir -p "${IMAGES_DIR}"
+    sudo install -m 0644 "${AXIS_MEDIA_STAGING}/axis-setup.iso" "${AXIS_SETUP_ISO}"
+    cleanup_axis_media_staging
+    AXIS_MEDIA_STAGING=""
+}
+
+require_option_value() {
+    [ "$#" -ge 2 ] && [ -n "$2" ] || die "$1 requires a value"
+}
+
 while [ $# -gt 0 ]; do
     case "$1" in
-        --windows-iso)      WINDOWS_ISO="$2"; shift 2 ;;
-        --name)             VM_NAME="$2"; shift 2 ;;
-        --windows-version)  WINDOWS_VERSION="$2"; shift 2 ;;
-        --memory)           MEMORY_MIB="$2"; shift 2 ;;
-        --vcpus)            VCPUS="$2"; shift 2 ;;
-        --disk-size)        DISK_SIZE_GIB="$2"; shift 2 ;;
-        --images-dir)       IMAGES_DIR="$2"; shift 2 ;;
+        --windows-iso)      require_option_value "$@"; WINDOWS_ISO="$2"; shift 2 ;;
+        --name)             require_option_value "$@"; VM_NAME="$2"; shift 2 ;;
+        --windows-version)  require_option_value "$@"; WINDOWS_VERSION="$2"; shift 2 ;;
+        --memory)           require_option_value "$@"; MEMORY_MIB="$2"; shift 2 ;;
+        --vcpus)            require_option_value "$@"; VCPUS="$2"; shift 2 ;;
+        --disk-size)        require_option_value "$@"; DISK_SIZE_GIB="$2"; shift 2 ;;
+        --images-dir)       require_option_value "$@"; IMAGES_DIR="$2"; shift 2 ;;
+        --axis-installer)   require_option_value "$@"; AXIS_INSTALLER="$2"; shift 2 ;;
+        --skip-axis-media)  AXIS_MEDIA=0; shift ;;
         --skip-packages)    SKIP_PACKAGES=1; shift ;;
         --dry-run)          DRY_RUN=1; shift ;;
         -h|--help)          usage; exit 0 ;;
@@ -86,6 +151,16 @@ esac
 [ -n "${WINDOWS_ISO}" ] || { usage >&2; die "--windows-iso is required"; }
 if [ "${DRY_RUN}" -eq 0 ]; then
     [ -r "${WINDOWS_ISO}" ] || die "Windows ISO not readable: ${WINDOWS_ISO}"
+fi
+if [ -n "${AXIS_INSTALLER}" ]; then
+    [ "${AXIS_MEDIA}" -eq 1 ] || die "--axis-installer cannot be used with --skip-axis-media"
+    case "${AXIS_INSTALLER}" in
+        *.[eE][xX][eE]|*.[mM][sS][iI]|*.[zZ][iI][pP]) ;;
+        *) die "--axis-installer must point to an .exe, .msi, or .zip file" ;;
+    esac
+    if [ "${DRY_RUN}" -eq 0 ]; then
+        [ -r "${AXIS_INSTALLER}" ] || die "Axis Studio installer not readable: ${AXIS_INSTALLER}"
+    fi
 fi
 
 # ---------------------------------------------------------------- preflight
@@ -106,12 +181,17 @@ command -v apt-get >/dev/null || warn "apt-get not found; install QEMU/libvirt p
 # ------------------------------------------------------------ host packages
 if [ "${SKIP_PACKAGES}" -eq 0 ] && command -v apt-get >/dev/null; then
     log "Installing host virtualization packages (sudo required)"
-    run sudo apt-get update
-    run sudo apt-get install -y \
-        qemu-system-x86 qemu-utils \
-        libvirt-daemon-system libvirt-clients virtinst virt-manager virt-viewer \
-        ovmf swtpm swtpm-tools \
+    HOST_PACKAGES=(
+        qemu-system-x86 qemu-utils
+        libvirt-daemon-system libvirt-clients virtinst virt-manager virt-viewer
+        ovmf swtpm swtpm-tools
         curl
+    )
+    if [ "${AXIS_MEDIA}" -eq 1 ]; then
+        HOST_PACKAGES+=(xorriso)
+    fi
+    run sudo apt-get update
+    run sudo apt-get install -y "${HOST_PACKAGES[@]}"
 fi
 
 log "Enabling libvirtd and default NAT network"
@@ -138,12 +218,21 @@ fi
 
 # ------------------------------------------------------------------ VM disk
 DISK_PATH="${IMAGES_DIR}/${VM_NAME}.qcow2"
+AXIS_SETUP_ISO="${IMAGES_DIR}/${VM_NAME}-axis-setup.iso"
 if [ "${DRY_RUN}" -eq 0 ] && sudo virsh dominfo "${VM_NAME}" >/dev/null 2>&1; then
     die "Domain '${VM_NAME}' already exists. Remove it first: sudo virsh undefine ${VM_NAME} --nvram --tpm"
 fi
 if [ "${DRY_RUN}" -eq 0 ] && sudo test -e "${DISK_PATH}"; then
     die "Disk already exists: ${DISK_PATH} (remove it or pass --name)"
 fi
+if [ "${AXIS_MEDIA}" -eq 1 ] && [ "${DRY_RUN}" -eq 0 ] && sudo test -e "${AXIS_SETUP_ISO}"; then
+    die "Axis setup ISO already exists: ${AXIS_SETUP_ISO} (remove it or pass --name)"
+fi
+
+if [ "${AXIS_MEDIA}" -eq 1 ]; then
+    build_axis_setup_media
+fi
+
 log "Creating sparse ${DISK_SIZE_GIB} GiB guest disk at ${DISK_PATH}"
 run sudo qemu-img create -f qcow2 "${DISK_PATH}" "${DISK_SIZE_GIB}G"
 
@@ -176,6 +265,11 @@ VIRT_INSTALL_ARGS=(
     --boot uefi
     --noautoconsole
 )
+if [ "${AXIS_MEDIA}" -eq 1 ]; then
+    VIRT_INSTALL_ARGS+=(
+        --disk "path=${AXIS_SETUP_ISO},device=cdrom,readonly=on"
+    )
+fi
 if [ "${WINDOWS_VERSION}" = "win11" ]; then
     VIRT_INSTALL_ARGS+=(
         --tpm backend.type=emulator,backend.version=2.0,model=tpm-crb
@@ -202,10 +296,25 @@ Next steps (details in vm/README.md):
      During install, load the disk driver from the virtio-win CD
      (amd64\\${WINDOWS_VERSION}), and afterwards run virtio-win-gt-x64.msi
      from the same CD for the network/guest drivers.
-  2. Detect and attach the Noitom transceiver:
+EOF
+
+if [ "${AXIS_MEDIA}" -eq 1 ]; then
+    cat <<EOF
+  2. In Windows, open the AXIS_SETUP CD and double-click
+     START-AXIS-SETUP.cmd. The guide installs the supplied package or opens
+     Noitom's official download and account pages, then explains Product-ID
+     registration and Axis Studio login. Credentials are never stored here.
+EOF
+else
+    cat <<EOF
+  2. In Windows, download the correct Axis Studio edition from your Noitom
+     account, install it, register the Product ID, and sign in.
+EOF
+fi
+
+cat <<EOF
+  3. Detect and attach the Noitom transceiver from this vm directory:
        ./attach-usb.sh detect && ./attach-usb.sh attach
-  3. In the guest, install Axis Studio and activate it (Noitom manual:
-     https://support.noitom.com.cn/s/customer-manual-en/doc/1-software-installation-and-activation-yC49l3MCA2 )
   4. Configure the transceiver's RNDIS adapter in Windows as 192.168.1.100/24
      and point Axis Studio's BVH broadcast at this host: 192.168.122.1:7012 (UDP).
   5. Verify frames on the host:

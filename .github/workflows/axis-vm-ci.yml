@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 KevinMi2023p
+
+name: Axis VM CI
+
+on:
+  pull_request:
+    paths:
+      - "vm/**"
+      - ".github/workflows/axis-vm-ci.yml"
+  push:
+    paths:
+      - "vm/**"
+      - ".github/workflows/axis-vm-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  setup-script:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Check shell syntax
+        run: bash -n vm/setup-axis-vm.sh vm/attach-usb.sh
+      - name: Test Axis VM setup flow
+        run: python3 -m unittest discover -s vm/tests -p "test_*.py" -v
+
+  windows-setup-helper:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Test guided Windows setup helper
+        shell: powershell
+        run: .\vm\tests\test_windows_setup.ps1
