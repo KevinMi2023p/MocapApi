@@ -210,10 +210,12 @@ foreign Host headers, and exposes no cross-origin command API, but BVH packets
 themselves are not encrypted or authenticated.
 
 For the separate question of running Axis and its USB-attached transceiver on
-Linux, see [USB_ON_LINUX.md](docs/USB_ON_LINUX.md). The repository also contains
-a developer-only, network-disabled reference harness under
-`tools/wine-reference`; neither tool is part of release archives or a claim of
-hardware compatibility.
+Linux, see [USB_ON_LINUX.md](docs/USB_ON_LINUX.md). For a scripted, attached
+QEMU/KVM Windows VM that runs Axis Studio next to a Linux-only station, see
+`tools/windows-vm` and [WINDOWS_VM.md](docs/WINDOWS_VM.md). The repository also
+contains a developer-only, network-disabled reference harness under
+`tools/wine-reference`; none of these tools are part of release archives or a
+claim of hardware compatibility.
 
 ## Capability matrix
 

@@ -7,7 +7,8 @@ The control-by-control evidence, placement gaps, and support classifications are
 maintained in [PARITY_LEDGER.md](PARITY_LEDGER.md). The open-source screenshot
 protocol is documented in [VISUAL_TESTING.md](VISUAL_TESTING.md). Linux USB,
 Wine, and Windows-VM boundaries are recorded in
-[USB_ON_LINUX.md](USB_ON_LINUX.md).
+[USB_ON_LINUX.md](USB_ON_LINUX.md). The attached Windows VM provisioning path
+for Axis Studio is documented in [WINDOWS_VM.md](WINDOWS_VM.md).
 
 ## Primary product references
 

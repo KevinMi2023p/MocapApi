@@ -25,6 +25,7 @@ source, failure mode, UI state, tests, and platform support are all explicit.
 - [ ] Capture private, fixed-version Windows reference states and record measured placement deltas
 - [ ] Validate string and both published 64-byte binary header generations against captured Axis Studio 2/3 data
 - [ ] Validate 1–4 avatars, all six rotations, displacement modes, UDP loss and TCP reconnect
+- [ ] Validate the attached Windows VM path on hardware: transceiver VID:PID capture, viewport under llvmpipe, end-to-end BVH stream
 - [ ] Add saved connection profiles and automatic reconnect with bounded backoff
 - [ ] Add BVH file playback and deterministic regression fixtures
 - [ ] Add local BVH/CSV export with coordinate/unit presets

@@ -112,7 +112,9 @@ capture, or hardware behavior.
 
 QEMU/libvirt can attach a selected host USB device exclusively to a Windows
 guest. This lets Windows use its RNDIS driver and provides the closest behavior
-to a supported Axis installation.
+to a supported Axis installation. An implementation of this architecture now
+lives at `studio/tools/windows-vm/`; the full station guide is
+[WINDOWS_VM.md](WINDOWS_VM.md).
 
 Use all of the following safeguards:
 
