@@ -147,3 +147,7 @@ try {
 } finally {
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+# The ambiguous-installer case intentionally returns 2 from cmd.exe. Reset the
+# script process status after all assertions pass so CI observes success.
+exit 0
