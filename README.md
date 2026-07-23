@@ -232,7 +232,7 @@ The sensors output raw IMU data. Converting that into usable joint angles requir
 
 ### Axis Studio — The Software Bridge
 
-[Axis Studio](https://cdn.noitom.com/download/Axis%20Studio%203%20(Anti-Mag)/Axis_Studio_nacs_x64_3_0_14004_2620_20251222173616363.msi) is Noitom's professional motion capture software. It is the critical link between the hardware sensors and MocapApi.
+[Axis Studio](https://shop.noitom.com.cn/common/product_item/index.jhtml?productItemId=3) is Noitom's professional motion capture software. It is the critical link between the hardware sensors and MocapApi. Linux stations can use the repository's [attached Windows VM setup](vm/README.md), including an opt-in download of the pinned Axis Studio 3 Anti-Mag installer. Choose the Axis edition that matches the hardware and license; the Anti-Mag build is not a universal replacement for legacy Online or Dongle editions.
 
 #### What Axis Studio does
 

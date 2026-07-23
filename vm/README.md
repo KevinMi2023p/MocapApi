@@ -44,25 +44,68 @@ open BVH/Calc network boundary is the only integration surface.
   boxes without nested virtualization (like the machine this was authored on)
   cannot run the guest — the scripts are validated there with `--dry-run` only.
 - ≥ 16 GB RAM (guest defaults to 8 GB), ≥ 130 GB free disk.
-- A Windows 10 or 11 installer ISO and a Windows license
-  ([microsoft.com/software-download](https://www.microsoft.com/software-download)).
+- A Windows 10 or 11 installer ISO and a Windows license. Download the x64 ISO
+  from Microsoft's [Windows 11 download page](https://www.microsoft.com/software-download/windows11),
+  or pass its fresh direct download URL to the setup script. Microsoft-generated
+  ISO URLs expire after 24 hours. For `--windows-version win10`, use Microsoft's
+  [Windows 10 ISO page](https://www.microsoft.com/software-download/windows10ISO)
+  instead; script errors select the matching page automatically.
 - An Axis Studio license (online account/Product-ID for v2.12+/v3; legacy
   Axis 2.x CodeMeter dongles can be passed through like the transceiver).
 
 ## 1. Provision the VM
 
 ```sh
+# The filenames below are examples, not files bundled with this repository.
 ./setup-axis-vm.sh \
-    --windows-iso ~/Downloads/Win11_24H2_English_x64.iso \
+    --windows-iso ~/Downloads/Win11_25H2_English_x64.iso \
     --axis-installer ~/Downloads/AxisStudioSetup.msi
 
-# The Axis installer is optional; the guest helper opens Noitom's official
-# download and account pages when it is not supplied.
-./setup-axis-vm.sh --windows-iso ~/Downloads/Win11_24H2_English_x64.iso
+# For compatible Axis Studio 3 Anti-Mag hardware, fetch the pinned installer
+# directly from Noitom and cache it outside the repository:
+./setup-axis-vm.sh \
+    --windows-iso ~/Downloads/Win11_25H2_English_x64.iso \
+    --download-axis-studio-3
+
+# Or have the script fetch both files. Paste the fresh direct ISO link that
+# Microsoft generates after selecting the x64 edition and language; the stable
+# microsoft.com download-page URL is HTML and must not be used here.
+./setup-axis-vm.sh \
+    --windows-iso-url 'https://software.download.prss.microsoft.com/.../Win11.iso?...' \
+    --download-axis-studio-3
+
+# The Axis installer is optional. Omitting it makes the guest helper open
+# Noitom's official download and account pages for an edition chosen by license.
+./setup-axis-vm.sh --windows-iso ~/Downloads/Win11_25H2_English_x64.iso
 
 # smaller/older stations:
 ./setup-axis-vm.sh --windows-iso ... --windows-version win10 --memory 6144
 ```
+
+`--axis-installer-url URL` accepts a direct HTTPS `.exe`, `.msi`, or `.zip`
+link for another licensed Axis edition. URL downloads are cached under
+`${XDG_CACHE_HOME:-$HOME/.cache}/axis-vm/downloads`; override that location
+with `--media-cache`. Downloads use temporary files and are moved into place
+only after their file-format headers are validated. The Windows and Axis
+binaries are licensed,
+multi-megabyte/gigabyte publisher artifacts and are intentionally never copied
+into this Git repository.
+
+Add `--download-only` to either URL-based command to prepare and validate the
+media without requiring KVM or changing libvirt. The script prints the cached
+paths; rerun the same command without `--download-only` when ready to create
+the VM. Cache filenames include a source key, so selecting a different Windows
+release, language, or Axis edition cannot silently reuse unrelated old media.
+
+During VM creation the selected Windows ISO is copied to
+`/var/lib/libvirt/images/<vm-name>-windows-installer.iso`. A system libvirt
+guest normally cannot traverse a user's home directory, so passing a file
+under `~/Downloads` or `~/.cache` directly to QEMU is unreliable. The original
+download remains in the user cache for reuse.
+
+If no Windows source is provided, or an example path does not exist, the script
+prints the official Microsoft download page and the exact flags to use instead
+of only reporting that the file is unreadable.
 
 The script checks KVM, installs the virtualization stack, downloads the
 virtio-win driver ISO, creates a sparse qcow2 disk, and boots the Windows
@@ -196,6 +239,7 @@ without mocap hardware, use `--body-control-device mock` first.
 | Symptom | Check |
 | --- | --- |
 | `setup-axis-vm.sh` dies with "/dev/kvm missing" | Enable VT-x/AMD-V in firmware; on cloud instances use a bare-metal/nested-virt-capable host |
+| A publisher download returns HTTP 403 | A Microsoft ISO link may have expired; generate a fresh link. Noitom may require browser/account access; download the matching edition there and pass its actual path with `--axis-installer` |
 | Windows installer sees no disk | *Load driver* from the virtio-win CD (`amd64\win11`) |
 | `AXIS_SETUP` CD is missing | Recreate the VM without `--skip-axis-media`; check `sudo virsh domblklist axis-studio` for the `axis-studio-axis-setup.iso` CD-ROM |
 | Axis helper opens a download page instead of installing | Recreate with `--axis-installer /path/to/AxisStudioSetup.msi` (also accepts `.exe`/`.zip`), or download the assigned edition inside the guest |
