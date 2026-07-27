@@ -140,6 +140,7 @@ interface method, all enums and event structures.
 | `demo/u3d/`   | Unity3D sample project.                                                              |
 | `demo/ue4/`   | Unreal Engine sample project.                                                        |
 | `demo/wtl/`   | Native C++ (WTL) console/GUI sample.                                                 |
+| [`demo/mocap-wuji-cpp/`](demo/mocap-wuji-cpp) | Native C++ Axis Studio-to-Wuji Hand 2 bridge.                  |
 | `doc/`        | Detailed API reference ([English](doc/MocapApi_en.md) · [中文](doc/MocapApi_zh.md)). |
 | `install.bat` | Copies the runtime DLL and C# binding into the Unity/Unreal demos.                   |
 

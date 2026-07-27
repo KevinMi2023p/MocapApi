@@ -27,6 +27,40 @@ print(f'mocap_lib_file={mocap_lib_file}')
 
 MocapApi = cdll.LoadLibrary(mocap_lib_file)
 
+MocapApi.MCPGetMocapApiVersion.argtypes = [
+  POINTER(c_uint32),
+  POINTER(c_uint32),
+  POINTER(c_uint32),
+  POINTER(c_uint32),
+]
+MocapApi.MCPGetMocapApiVersion.restype = None
+MocapApi.MCPGetMocapApiVersionString.argtypes = []
+MocapApi.MCPGetMocapApiVersionString.restype = c_char_p
+
+
+def get_mocap_api_version():
+  """Return the loaded native MocapApi version as four unsigned integers."""
+  major = c_uint32()
+  minor = c_uint32()
+  build = c_uint32()
+  revision = c_uint32()
+  MocapApi.MCPGetMocapApiVersion(
+    pointer(major),
+    pointer(minor),
+    pointer(build),
+    pointer(revision),
+  )
+  return major.value, minor.value, build.value, revision.value
+
+
+def get_mocap_api_version_string():
+  """Return the loaded native MocapApi version string."""
+  version = MocapApi.MCPGetMocapApiVersionString()
+  if version is None:
+    raise RuntimeError('MCPGetMocapApiVersionString returned no version')
+  return version.decode('utf-8')
+
+
 MCPError = namedtuple('EMCPError', [
   'NoError',
   'MoreEvent',
@@ -43,8 +77,15 @@ MCPError = namedtuple('EMCPError', [
   'NoneMessage',
   'NoneParent',
   'NoneChild',
-  'AddressInUse'
-])._make(range(16))
+  'AddressInUse',
+  'ServerNotReady',
+  'ClientNotReady',
+  'IncompleteCommand',
+  'UDP',
+  'TCP',
+  'QueuedCommandFaild',
+  'InterfaceIncompatible',
+])._make(range(23))
 
 EMCPRecoredFlag = namedtuple('EMCPRecoredFlag', [
   'RecoredFlag_AutoRecalculating',
@@ -288,7 +329,7 @@ class MCPBodyPart(object):
 MCPJointHandle = c_uint64
 
 class MCPJoint(object):
-  IMCPJointApi_Version = c_char_p(b"PROC_TABLE:IMCPJoint_003")
+  IMCPJointApi_Version = c_char_p(b"PROC_TABLE:IMCPJoint_004")
 
   class MCPJointApi(Structure):
     _fields_ = [
@@ -310,7 +351,8 @@ class MCPJoint(object):
       ('GetJointParentJointTag', CFUNCTYPE(c_int32, POINTER(c_int32), c_int32)),
       ('GetJointGroundingState', CFUNCTYPE(c_int32, POINTER(c_int32), MCPJointHandle)),
       ('GetJointGroundablePoints', CFUNCTYPE(c_int32, POINTER(c_float), POINTER(c_uint32), POINTER(c_uint32), MCPJointHandle)),
-      ('GetJointGlobalRotation', CFUNCTYPE(c_int32, POINTER(c_float),c_int32, c_int32, POINTER(c_float), MCPJointHandle)),
+      ('GetJointGlobalRotation',
+       CFUNCTYPE(c_int32, POINTER(c_float), POINTER(c_float), POINTER(c_float), POINTER(c_float), MCPJointHandle)),
       ('GetJointGlobalPosition', CFUNCTYPE(c_int32, POINTER(c_float), POINTER(c_float), POINTER(c_float), MCPJointHandle))
     ]
 
@@ -373,6 +415,31 @@ class MCPJoint(object):
     if err != MCPError.NoError:
       raise RuntimeError('Can not get joint local rotation: {0}'.format(MCPError._fields[err]))
     return w.value, x.value, y.value, z.value
+
+  def get_global_rotation(self):
+    """Return the global joint quaternion in ``(w, x, y, z)`` order."""
+    x = c_float()
+    y = c_float()
+    z = c_float()
+    w = c_float()
+    err = self.api.contents.GetJointGlobalRotation(
+      pointer(x), pointer(y), pointer(z), pointer(w), self.handle
+    )
+    if err != MCPError.NoError:
+      raise RuntimeError('Can not get joint global rotation: {0}'.format(MCPError._fields[err]))
+    return w.value, x.value, y.value, z.value
+
+  def get_global_position(self):
+    """Return the global joint position in ``(x, y, z)`` order."""
+    x = c_float()
+    y = c_float()
+    z = c_float()
+    err = self.api.contents.GetJointGlobalPosition(
+      pointer(x), pointer(y), pointer(z), self.handle
+    )
+    if err != MCPError.NoError:
+      raise RuntimeError('Can not get joint global position: {0}'.format(MCPError._fields[err]))
+    return x.value, y.value, z.value
 
   def get_local_rotation_by_euler(self):
     x = c_float()
@@ -461,7 +528,7 @@ class MCPJoint(object):
 MCPAvatarHandle = c_uint64
 
 class MCPAvatar(object):
-  IMCPAvatarApi_Version = c_char_p(b'PROC_TABLE:IMCPAvatar_003')
+  IMCPAvatarApi_Version = c_char_p(b'PROC_TABLE:IMCPAvatar_005')
 
   class MCPAvatarApi(Structure):
     _fields_ = [
@@ -1536,7 +1603,7 @@ MCPApplicationHandle = c_uint64
 MCPTrackerHandle = c_uint64        
 MCPEventHandleProc = c_uint64        
 class MCPApplication(object):
-  IMCPApplicationApi_Version = c_char_p(b'PROC_TABLE:IMCPApplication_002')
+  IMCPApplicationApi_Version = c_char_p(b'PROC_TABLE:IMCPApplication_004')
 
   class MCPApplicationApi(Structure):
     _fields_ = [
@@ -1552,12 +1619,14 @@ class MCPApplication(object):
       ('GetApplicationRigidBodies', CFUNCTYPE(c_int32, POINTER(c_uint64), POINTER(c_uint32), MCPApplicationHandle)),
       ('GetApplicationAvatars', CFUNCTYPE(c_int32, POINTER(c_uint64), POINTER(c_uint32), MCPApplicationHandle)),
       ('PollApplicationNextEvent', CFUNCTYPE(c_int32, POINTER(MCPEvent), POINTER(c_uint32), MCPApplicationHandle)),
-      ('GetApplicationSensorModules', CFUNCTYPE(c_int32, MCPSensorModuleHandle, c_int32, MCPApplicationHandle)),
-      ('GetApplicationTrackers', CFUNCTYPE(c_int32, MCPTrackerHandle, POINTER(c_uint32), MCPApplicationHandle)),
+      ('GetApplicationSensorModules',
+       CFUNCTYPE(c_int32, POINTER(MCPSensorModuleHandle), POINTER(c_uint32), MCPApplicationHandle)),
+      ('GetApplicationTrackers',
+       CFUNCTYPE(c_int32, POINTER(MCPTrackerHandle), POINTER(c_uint32), MCPApplicationHandle)),
       ('QueuedServerCommand', CFUNCTYPE(c_int32, MCPCommandHandle, MCPApplicationHandle)),
-      ('RegisterEventHandler', CFUNCTYPE(c_int32, MCPEventHandleProc,  POINTER(c_uint64), MCPApplicationHandle)),
-      ('UnregisterEventHandler', CFUNCTYPE(c_int32, MCPEventHandleProc,  POINTER(c_uint64), MCPApplicationHandle)),
-      ('GetAppplicationSystem', CFUNCTYPE(c_int32, MCPSystemHandle, MCPApplicationHandle)),
+      ('RegisterEventHandler', CFUNCTYPE(c_int32, MCPEventHandleProc, c_ssize_t, MCPApplicationHandle)),
+      ('UnregisterEventHandler', CFUNCTYPE(c_int32, MCPEventHandleProc, POINTER(c_ssize_t), MCPApplicationHandle)),
+      ('GetAppplicationSystem', CFUNCTYPE(c_int32, POINTER(MCPSystemHandle), MCPApplicationHandle)),
     ]
 
   api = POINTER(MCPApplicationApi)()
@@ -1693,21 +1762,28 @@ class MCPApplication(object):
     return [MCPTracker(tracker_handles[i]) for i in range(tracker_count.value)]
 
   def poll_next_event(self):
-    evt_count = c_uint32(0)
-    err = self.api.contents.PollApplicationNextEvent(POINTER(MCPEvent)(), pointer(evt_count), self._handle)
-    if err != MCPError.NoError:
-      raise RuntimeError('Can not poll application next event: {0}'.format(MCPError._fields[err]))
-    if evt_count.value == 0:
-      return []
-    evt_array = (MCPEvent * evt_count.value)()
-    for i in range(evt_count.value):
-      evt_array[i].size = sizeof(MCPEvent)
-    err = self.api.contents.PollApplicationNextEvent(evt_array, pointer(evt_count), self._handle)
-    if err != MCPError.NoError:
-      return []
-    if evt_count.value == 0:
-      return []
-    return [evt_array[i] for i in range(evt_count.value)]
+    while True:
+      evt_count = c_uint32(0)
+      err = self.api.contents.PollApplicationNextEvent(
+        POINTER(MCPEvent)(), pointer(evt_count), self._handle
+      )
+      if err != MCPError.NoError:
+        raise RuntimeError('Can not poll application next event: {0}'.format(MCPError._fields[err]))
+      if evt_count.value == 0:
+        return []
+
+      evt_array = (MCPEvent * evt_count.value)()
+      for i in range(evt_count.value):
+        evt_array[i].size = sizeof(MCPEvent)
+
+      err = self.api.contents.PollApplicationNextEvent(
+        evt_array, pointer(evt_count), self._handle
+      )
+      if err == MCPError.MoreEvent:
+        continue
+      if err != MCPError.NoError:
+        raise RuntimeError('Can not poll application next event: {0}'.format(MCPError._fields[err]))
+      return [evt_array[i] for i in range(evt_count.value)]
   
   def get_system(self):
     systemHandle =  MCPSystemHandle()

@@ -2,6 +2,8 @@
 
 # Import all objects that need to be exported from mocap_api
 from .mocap_api import (
+    get_mocap_api_version,
+    get_mocap_api_version_string,
     MCPError,
     MCPJointTag,
     MCPRigidBodyHandle,
@@ -64,6 +66,8 @@ from .mocap_api import (
 
 # Define package-level __all__ to control what's exported when using 'from mocap import *'
 __all__ = [
+    'get_mocap_api_version',
+    'get_mocap_api_version_string',
     'MCPError',
     'MCPJointTag',
     'MCPRigidBodyHandle',
