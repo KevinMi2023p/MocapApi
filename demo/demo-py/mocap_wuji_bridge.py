@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-"""Retarget an Axis Studio BVH hand to one Wuji Hand 2.
+"""Retarget Axis Studio BVH hands to the connected Wuji Hand 2 devices.
 
 The process intentionally keeps the two SDKs in one address space:
 
     Axis Studio UDP -> MocapApi -> MediaPipe landmarks -> Wuji retargeter -> hand
 
+Every discovered Wuji Hand 2 is connected; whether the left, the right, or
+both hands are present is auto-detected from each device's handedness, and the
+matching side of the Axis avatar drives it.
+
 Motor control is opt-in.  Without ``--enable-motors`` the program connects to
-the physical hand only to identify its handedness and verify that all joints
-are online.
+the physical hands only to identify their handedness and verify that all
+joints are online.
 """
 
 from __future__ import annotations
 
 import argparse
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 import time
 from typing import Any, Callable, Mapping, Sequence
@@ -107,7 +111,7 @@ class BridgeConfig:
     udp_port: int = DEFAULT_UDP_PORT
     bvh_rotation: str = DEFAULT_ROTATION
     avatar_name: str | None = None
-    hand_sn: str | None = None
+    hand_sns: tuple[str, ...] | None = None
     enable_motors: bool = False
 
 
@@ -138,6 +142,9 @@ class FreshnessWatchdog:
 
     def mark_valid(self, timestamp: float) -> None:
         self.last_valid_at = timestamp
+
+    def reset(self) -> None:
+        self.last_valid_at = None
 
     def expired(self, now: float) -> bool:
         return (
@@ -380,11 +387,15 @@ class MocapSource:
     def __init__(
         self,
         config: BridgeConfig,
-        side: str,
+        sides: Sequence[str],
         clock: Callable[[], float] = time.monotonic,
     ):
         self.config = config
-        self.side = normalize_handedness(side)
+        self.sides = tuple(normalize_handedness(side) for side in sides)
+        if not self.sides:
+            raise ConfigurationError("MocapSource needs at least one hand side")
+        if len(set(self.sides)) != len(self.sides):
+            raise ConfigurationError("MocapSource hand sides must be unique")
         self.clock = clock
         self.mcp: Any = None
         self.app: Any = None
@@ -446,17 +457,20 @@ class MocapSource:
         if avatar_name not in self._joint_cache:
             by_name = {joint.get_name(): joint for joint in avatar.get_joints()}
             missing = [
-                name for name in required_joint_names(self.side) if name not in by_name
+                name
+                for side in self.sides
+                for name in required_joint_names(side)
+                if name not in by_name
             ]
             if missing:
                 raise ConfigurationError(
                     f"avatar {avatar_name!r} does not contain the selected "
-                    f"{self.side} hand joints: {', '.join(missing)}"
+                    f"{'/'.join(self.sides)} hand joints: {', '.join(missing)}"
                 )
             self._joint_cache[avatar_name] = by_name
         return self._joint_cache[avatar_name]
 
-    def poll_latest(self) -> RawHandPose | None:
+    def poll_latest(self) -> Mapping[str, RawHandPose] | None:
         if self.app is None:
             raise RuntimeError("MocapSource is not open")
 
@@ -486,41 +500,63 @@ class MocapSource:
         avatar, avatar_name, posture_index = latest
         self._last_posture[avatar_name] = posture_index
         joints = self._joints_for_avatar(avatar, avatar_name)
-        positions: dict[str, npt.NDArray[np.float64]] = {}
-        rotations: dict[str, npt.NDArray[np.float64]] = {}
-        for name in required_joint_names(self.side):
-            positions[name] = _finite_point(joints[name].get_global_position(), name)
-        for finger in FINGER_NAMES:
-            name = _joint_name(self.side, finger, 3)
-            rotations[finger] = wxyz_to_xyzw(joints[name].get_global_rotation())
+        received_at = self.clock()
+        poses: dict[str, RawHandPose] = {}
+        for side in self.sides:
+            positions: dict[str, npt.NDArray[np.float64]] = {}
+            rotations: dict[str, npt.NDArray[np.float64]] = {}
+            for name in required_joint_names(side):
+                positions[name] = _finite_point(
+                    joints[name].get_global_position(), name
+                )
+            for finger in FINGER_NAMES:
+                name = _joint_name(side, finger, 3)
+                rotations[finger] = wxyz_to_xyzw(joints[name].get_global_rotation())
+            poses[side] = RawHandPose(
+                avatar_name=avatar_name,
+                posture_index=posture_index,
+                received_at=received_at,
+                positions=positions,
+                distal_rotations_xyzw=rotations,
+            )
+        return poses
 
-        return RawHandPose(
-            avatar_name=avatar_name,
-            posture_index=posture_index,
-            received_at=self.clock(),
-            positions=positions,
-            distal_rotations_xyzw=rotations,
-        )
+
+@dataclass
+class WujiHandUnit:
+    """One connected Wuji Hand 2 and its per-hand bridge state."""
+
+    sn: str
+    side: str
+    hand: Any = None
+    session: Any = None
+    publisher: Any = None
+    joint_state_sub: Any = None
+    diagnostic_sub: Any = None
+    latest_positions: npt.NDArray[np.float32] | None = field(
+        default=None, repr=False
+    )
+    motors_enabled: bool = False
+    enabled: bool = False
+    enable_attempted: bool = False
 
 
 class WujiTarget:
-    """Wuji discovery, retargeting, and opt-in motor control."""
+    """Wuji discovery, retargeting, and opt-in motor control.
 
-    def __init__(self, hand_sn: str | None = None):
-        self.hand_sn = hand_sn
+    Connects to every discovered Wuji Hand 2 (at most two, one per side) and
+    keeps one retarget session per hand.
+    """
+
+    def __init__(self, hand_sns: Sequence[str] | None = None):
+        self.hand_sns = tuple(hand_sns) if hand_sns else None
         self.manager: Any = None
-        self.hand: Any = None
-        self.side: str | None = None
-        self.session: Any = None
-        self.publisher: Any = None
-        self.joint_state_sub: Any = None
-        self.diagnostic_sub: Any = None
-        self.enabled = False
-        self.enable_attempted = False
+        self.hands: dict[str, WujiHandUnit] = {}
         self._wuji: dict[str, Any] = {}
 
-    def connect(self) -> str:
+    def connect(self) -> tuple[str, ...]:
         from wuji_sdk import (
+            ConnectOptions,
             DeviceType,
             HandModel,
             Handedness,
@@ -540,61 +576,89 @@ class WujiTarget:
             for device in manager.scan()
             if device.device_type == DeviceType.WujiHand2
         ]
-        if self.hand_sn is not None:
-            devices = [device for device in devices if device.sn == self.hand_sn]
-            if not devices:
+        if self.hand_sns is not None:
+            if len(set(self.hand_sns)) != len(self.hand_sns):
+                raise ConfigurationError("--hand-sn values must be unique")
+            by_sn = {device.sn: device for device in devices}
+            missing = [sn for sn in self.hand_sns if sn not in by_sn]
+            if missing:
                 raise ConfigurationError(
-                    f"Wuji Hand 2 serial {self.hand_sn!r} was not discovered"
+                    "Wuji Hand 2 serials were not discovered: " + ", ".join(missing)
                 )
-        if len(devices) != 1:
-            qualifier = "matching " if self.hand_sn is not None else ""
+            devices = [by_sn[sn] for sn in self.hand_sns]
+        if not devices:
+            raise ConfigurationError("no Wuji Hand 2 was discovered")
+        if len(devices) > 2:
             raise ConfigurationError(
-                f"expected exactly one {qualifier}Wuji Hand 2; found {len(devices)}"
+                f"found {len(devices)} Wuji Hand 2 devices; pass --hand-sn "
+                "(repeatable) to select at most two"
             )
 
-        device = devices[0]
-        hand = manager.connect(sn=device.sn, device_name="mocap_wuji_hand")
-        self.hand = hand
-        if not isinstance(hand, WujiHand2):
-            raise ConfigurationError(f"{device.sn} is not a Wuji Hand 2")
-        online = hand.online_joints_count().get()
-        if online != TOTAL_WUJI_JOINTS:
-            raise ConfigurationError(
-                f"Wuji Hand 2 has {online}/{TOTAL_WUJI_JOINTS} joints online"
+        # This process is the device's only client, and the multi-client
+        # DeviceBridge floods the host with tasks right when preflight needs a
+        # steady mocap stream.
+        options = ConnectOptions(enable_bridge=False)
+        for device in devices:
+            hand = manager.connect(
+                sn=device.sn,
+                device_name=f"mocap_wuji_{device.sn}",
+                options=options,
             )
-        side = normalize_handedness(hand.handedness().get())
-        retarget_side = Handedness.Left if side == "left" else Handedness.Right
-        session = RetargetSession.for_hand(HandModel.WujiHand2, side=retarget_side)
+            if not isinstance(hand, WujiHand2):
+                raise ConfigurationError(f"{device.sn} is not a Wuji Hand 2")
+            online = hand.online_joints_count().get()
+            if online != TOTAL_WUJI_JOINTS:
+                raise ConfigurationError(
+                    f"Wuji Hand 2 {device.sn} has "
+                    f"{online}/{TOTAL_WUJI_JOINTS} joints online"
+                )
+            side = normalize_handedness(hand.handedness().get())
+            if side in self.hands:
+                raise ConfigurationError(
+                    f"two {side} Wuji hands are connected "
+                    f"({self.hands[side].sn} and {device.sn}); "
+                    "pass --hand-sn to select one"
+                )
+            retarget_side = Handedness.Left if side == "left" else Handedness.Right
+            session = RetargetSession.for_hand(
+                HandModel.WujiHand2, side=retarget_side
+            )
+            self.hands[side] = WujiHandUnit(
+                sn=device.sn, side=side, hand=hand, session=session
+            )
+            LOGGER.info(
+                "Connected read-only to %s (%s, %d joints online)",
+                device.sn,
+                side,
+                online,
+            )
 
-        self.side = side
-        self.session = session
-        LOGGER.info(
-            "Connected read-only to %s (%s, %d joints online)",
-            hand.serial_number,
-            side,
-            online,
-        )
-        return side
+        sides = tuple(sorted(self.hands))
+        LOGGER.info("Auto-detected Wuji hand sides: %s", " + ".join(sides))
+        return sides
 
-    def retarget(self, keypoints: Any) -> npt.NDArray[np.float32]:
-        if self.session is None:
-            raise RuntimeError("WujiTarget is not connected")
+    def retarget(self, side: str, keypoints: Any) -> npt.NDArray[np.float32]:
+        unit = self.hands.get(side)
+        if unit is None or unit.session is None:
+            raise RuntimeError(f"WujiTarget has no connected {side} hand")
         validate_landmarks(keypoints)
-        return validate_qpos(self.session.step(keypoints))
+        return validate_qpos(unit.session.step(keypoints))
 
     def reset_retarget(self) -> None:
-        if self.session is not None:
-            self.session.reset()
+        for unit in self.hands.values():
+            if unit.session is not None:
+                unit.session.reset()
 
     def prepare_actuation(self) -> None:
-        if self.hand is None:
+        if not self.hands:
             raise RuntimeError("WujiTarget is not connected")
-        self.hand.effort_limit().set(EFFORT_LIMIT_AMPS)
-        self.hand.mit_params().set((MIT_KP, MIT_KD))
-        # Open every channel that can fail before motors are enabled.
-        self.publisher = self.hand.joint_command().publish()
-        self.joint_state_sub = self.hand.joint_states().subscribe()
-        self.diagnostic_sub = self.hand.joint_diagnostics().subscribe()
+        for unit in self.hands.values():
+            unit.hand.effort_limit().set(EFFORT_LIMIT_AMPS)
+            unit.hand.mit_params().set((MIT_KP, MIT_KD))
+            # Open every channel that can fail before motors are enabled.
+            unit.publisher = unit.hand.joint_command().publish()
+            unit.joint_state_sub = unit.hand.joint_states().subscribe()
+            unit.diagnostic_sub = unit.hand.joint_diagnostics().subscribe()
 
     @staticmethod
     def _drain_latest(subscription: Any) -> Any:
@@ -605,70 +669,99 @@ class WujiTarget:
                 return latest
             latest = frame
 
-    def latest_actual_positions(self) -> npt.NDArray[np.float32] | None:
-        if self.joint_state_sub is None:
-            return None
-        frame = self._drain_latest(self.joint_state_sub)
-        if frame is None:
-            return None
-        if len(frame.joints) != TOTAL_WUJI_JOINTS:
-            raise ConfigurationError(
-                f"joint-state frame contains {len(frame.joints)}/20 joints"
+    def latest_actual_positions(
+        self,
+    ) -> dict[str, npt.NDArray[np.float32]] | None:
+        for unit in self.hands.values():
+            if unit.joint_state_sub is None:
+                return None
+            frame = self._drain_latest(unit.joint_state_sub)
+            if frame is None:
+                continue
+            if len(frame.joints) != TOTAL_WUJI_JOINTS:
+                raise ConfigurationError(
+                    f"{unit.side} joint-state frame contains "
+                    f"{len(frame.joints)}/20 joints"
+                )
+            by_nid = {entry.nid: entry for entry in frame.joints}
+            if set(by_nid) != set(EXPECTED_WUJI_NIDS):
+                raise ConfigurationError(
+                    f"{unit.side} joint-state frame has unexpected node IDs: "
+                    f"{sorted(by_nid)}"
+                )
+            unit.latest_positions = validate_qpos(
+                [by_nid[nid].position for nid in EXPECTED_WUJI_NIDS]
             )
-        by_nid = {entry.nid: entry for entry in frame.joints}
-        if set(by_nid) != set(EXPECTED_WUJI_NIDS):
-            raise ConfigurationError(
-                f"joint-state frame has unexpected node IDs: {sorted(by_nid)}"
-            )
-        return validate_qpos([by_nid[nid].position for nid in EXPECTED_WUJI_NIDS])
+        if any(unit.latest_positions is None for unit in self.hands.values()):
+            return None
+        return {side: unit.latest_positions for side, unit in self.hands.items()}
 
     def enable(self) -> None:
-        if self.hand is None:
+        if not self.hands:
             raise RuntimeError("WujiTarget is not connected")
-        self.enable_attempted = True
-        self.hand.enable()
-        self.enabled = True
+        for unit in self.hands.values():
+            unit.enable_attempted = True
+            unit.hand.enable()
+            unit.enabled = True
 
     def all_motors_enabled(self) -> bool:
-        if self.diagnostic_sub is None:
+        if not self.hands:
             return False
-        frame = self._drain_latest(self.diagnostic_sub)
-        if frame is None:
-            return False
-        if len(frame.joints) != TOTAL_WUJI_JOINTS:
-            return False
-        if {entry.nid for entry in frame.joints} != set(EXPECTED_WUJI_NIDS):
-            return False
-        return all(entry.status_word.ext_state == 2 for entry in frame.joints)
+        for unit in self.hands.values():
+            if unit.diagnostic_sub is None:
+                return False
+            frame = self._drain_latest(unit.diagnostic_sub)
+            if frame is None:
+                continue
+            unit.motors_enabled = (
+                len(frame.joints) == TOTAL_WUJI_JOINTS
+                and {entry.nid for entry in frame.joints}
+                == set(EXPECTED_WUJI_NIDS)
+                and all(entry.status_word.ext_state == 2 for entry in frame.joints)
+            )
+        return all(unit.motors_enabled for unit in self.hands.values())
 
-    def send(self, qpos: Any) -> None:
-        if self.publisher is None or not self.enabled:
-            raise RuntimeError("Wuji motors are not ready for commands")
-        positions = validate_qpos(qpos)
+    def send(self, commands: Mapping[str, Any]) -> None:
+        if set(commands) != set(self.hands):
+            raise RuntimeError(
+                f"expected commands for {sorted(self.hands)}; "
+                f"got {sorted(commands)}"
+            )
         command_type = self._wuji["JointCommand"]
-        self.publisher.send(
-            [command_type(float(position), 0.0, 0.0) for position in positions]
-        )
+        for side, qpos in commands.items():
+            unit = self.hands[side]
+            if unit.publisher is None or not unit.enabled:
+                raise RuntimeError(
+                    f"Wuji {side} motors are not ready for commands"
+                )
+            positions = validate_qpos(qpos)
+            unit.publisher.send(
+                [command_type(float(position), 0.0, 0.0) for position in positions]
+            )
 
     def close(self) -> None:
-        if self.hand is not None and (self.enabled or self.enable_attempted):
-            try:
-                self.hand.disable()
-            except Exception:
-                LOGGER.exception("Wuji disable failed; requesting emergency stop")
-                with contextlib.suppress(Exception):
-                    self.hand.emergency_stop()
-            finally:
-                self.enabled = False
-                self.enable_attempted = False
-        for resource in (
-            self.publisher,
-            self.joint_state_sub,
-            self.diagnostic_sub,
-        ):
-            if resource is not None:
-                with contextlib.suppress(Exception):
-                    resource.close()
+        for unit in self.hands.values():
+            if unit.hand is not None and (unit.enabled or unit.enable_attempted):
+                try:
+                    unit.hand.disable()
+                except Exception:
+                    LOGGER.exception(
+                        "Wuji %s disable failed; requesting emergency stop",
+                        unit.side,
+                    )
+                    with contextlib.suppress(Exception):
+                        unit.hand.emergency_stop()
+                finally:
+                    unit.enabled = False
+                    unit.enable_attempted = False
+            for resource in (
+                unit.publisher,
+                unit.joint_state_sub,
+                unit.diagnostic_sub,
+            ):
+                if resource is not None:
+                    with contextlib.suppress(Exception):
+                        resource.close()
         if self.manager is not None:
             with contextlib.suppress(Exception):
                 self.manager.disconnect_all()
@@ -676,18 +769,20 @@ class WujiTarget:
 
 def _pump_tracking(
     source: MocapSource,
-    builder: HandLandmarkBuilder,
+    builders: Mapping[str, HandLandmarkBuilder],
     target: WujiTarget,
     watchdog: FreshnessWatchdog,
-) -> npt.NDArray[np.float32] | None:
-    raw = source.poll_latest()
-    now = time.monotonic()
-    if raw is None:
-        watchdog.require_fresh(now)
+) -> dict[str, npt.NDArray[np.float32]] | None:
+    raws = source.poll_latest()
+    if not raws:
         return None
-    frame = builder.build(raw)
-    qpos = target.retarget(frame.keypoints)
-    watchdog.mark_valid(frame.received_at)
+    qpos: dict[str, npt.NDArray[np.float32]] = {}
+    received_at = 0.0
+    for side, raw in raws.items():
+        frame = builders[side].build(raw)
+        qpos[side] = target.retarget(side, frame.keypoints)
+        received_at = frame.received_at
+    watchdog.mark_valid(received_at)
     return qpos
 
 
@@ -695,17 +790,17 @@ def _wait_with_tracking(
     predicate: Callable[[], Any],
     deadline: float,
     source: MocapSource,
-    builder: HandLandmarkBuilder,
+    builders: Mapping[str, HandLandmarkBuilder],
     target: WujiTarget,
     watchdog: FreshnessWatchdog,
     description: str,
-) -> tuple[Any, npt.NDArray[np.float32]]:
-    latest_qpos: npt.NDArray[np.float32] | None = None
+) -> tuple[Any, dict[str, npt.NDArray[np.float32]]]:
+    latest_qpos: dict[str, npt.NDArray[np.float32]] | None = None
     next_poll = time.monotonic()
     while time.monotonic() < deadline:
         now = time.monotonic()
         if now >= next_poll:
-            updated = _pump_tracking(source, builder, target, watchdog)
+            updated = _pump_tracking(source, builders, target, watchdog)
             if updated is not None:
                 latest_qpos = updated
             next_poll = now + FRAME_BUDGET_SECONDS
@@ -719,16 +814,18 @@ def _wait_with_tracking(
 
 def _activate_motors(
     source: MocapSource,
-    builder: HandLandmarkBuilder,
+    builders: Mapping[str, HandLandmarkBuilder],
     target: WujiTarget,
     watchdog: FreshnessWatchdog,
-) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+) -> tuple[
+    dict[str, npt.NDArray[np.float32]], dict[str, npt.NDArray[np.float32]]
+]:
     target.prepare_actuation()
     actual, _ = _wait_with_tracking(
         target.latest_actual_positions,
         time.monotonic() + JOINT_STATE_TIMEOUT_SECONDS,
         source,
-        builder,
+        builders,
         target,
         watchdog,
         "a complete Wuji joint-state frame",
@@ -738,34 +835,60 @@ def _activate_motors(
         lambda: True if target.all_motors_enabled() else None,
         time.monotonic() + ENABLE_TIMEOUT_SECONDS,
         source,
-        builder,
+        builders,
         target,
         watchdog,
         "all Wuji motors to report Enabled",
     )
     LOGGER.warning("All motors enabled; beginning tracked command stream")
-    return np.asarray(actual, dtype=np.float32), enabled_qpos
+    return (
+        {side: np.asarray(qpos, dtype=np.float32) for side, qpos in actual.items()},
+        enabled_qpos,
+    )
 
 
 def run_bridge(
     config: BridgeConfig,
-    source_factory: Callable[[BridgeConfig, str], MocapSource] = MocapSource,
-    target_factory: Callable[[str | None], WujiTarget] = WujiTarget,
+    source_factory: Callable[
+        [BridgeConfig, Sequence[str]], MocapSource
+    ] = MocapSource,
+    target_factory: Callable[[Sequence[str] | None], WujiTarget] = WujiTarget,
 ) -> None:
-    target = target_factory(config.hand_sn)
+    target = target_factory(config.hand_sns)
     source: MocapSource | None = None
     try:
-        side = target.connect()
-        source = source_factory(config, side)
+        sides = target.connect()
+        source = source_factory(config, sides)
         source.open()
-        builder = HandLandmarkBuilder(side)
+        builders = {side: HandLandmarkBuilder(side) for side in sides}
         watchdog = FreshnessWatchdog()
         startup_deadline = time.monotonic() + STARTUP_TIMEOUT_SECONDS
-        latest_qpos: npt.NDArray[np.float32] | None = None
+        latest_qpos: dict[str, npt.NDArray[np.float32]] | None = None
         next_poll = time.monotonic()
         last_invalid_log = 0.0
 
-        while latest_qpos is None or not builder.calibration_ready:
+        def check_preflight_freshness(now: float) -> None:
+            # Before motors are armed a tracking gap is not a safety problem:
+            # discard the partial calibration and wait for the stream to
+            # resume, instead of failing like the post-preflight watchdog.
+            nonlocal latest_qpos, startup_deadline
+            if not watchdog.expired(now):
+                return
+            age_ms = (now - watchdog.last_valid_at) * 1000.0  # type: ignore[operator]
+            LOGGER.warning(
+                "Tracking gap of %.1f ms during preflight; restarting calibration",
+                age_ms,
+            )
+            for builder in builders.values():
+                builder.reset()
+            target.reset_retarget()
+            watchdog.reset()
+            latest_qpos = None
+            startup_deadline = now + STARTUP_TIMEOUT_SECONDS
+
+        while latest_qpos is None or not all(
+            builder.calibration_ready for builder in builders.values()
+        ):
             now = time.monotonic()
             if now >= startup_deadline and watchdog.last_valid_at is None:
                 raise TrackingStaleError(
@@ -773,35 +896,36 @@ def run_bridge(
                     f"{STARTUP_TIMEOUT_SECONDS:.0f} seconds"
                 )
             if now < next_poll:
-                watchdog.require_fresh(now)
+                check_preflight_freshness(now)
                 time.sleep(min(0.001, next_poll - now))
                 continue
             next_poll = now + FRAME_BUDGET_SECONDS
             try:
-                updated = _pump_tracking(source, builder, target, watchdog)
+                updated = _pump_tracking(source, builders, target, watchdog)
             except FrameValidationError as exc:
-                builder.reset()
+                for builder in builders.values():
+                    builder.reset()
                 target.reset_retarget()
                 if now - last_invalid_log >= 1.0:
                     LOGGER.warning("Rejected mocap frame during preflight: %s", exc)
                     last_invalid_log = now
-                watchdog.require_fresh(now)
+                check_preflight_freshness(now)
                 continue
             if updated is not None:
                 latest_qpos = updated
-            watchdog.require_fresh(time.monotonic())
+            check_preflight_freshness(time.monotonic())
 
         LOGGER.info(
-            "Preflight complete: %d valid frames, %s avatar side",
+            "Preflight complete: %d valid frames, %s avatar side(s)",
             TIP_CALIBRATION_FRAMES,
-            side,
+            " + ".join(sides),
         )
 
-        blend_from: npt.NDArray[np.float32] | None = None
+        blend_from: dict[str, npt.NDArray[np.float32]] | None = None
         blend_started = 0.0
         if config.enable_motors:
             blend_from, latest_qpos = _activate_motors(
-                source, builder, target, watchdog
+                source, builders, target, watchdog
             )
             blend_started = time.monotonic()
         else:
@@ -821,7 +945,7 @@ def run_bridge(
                 continue
             next_poll = now + FRAME_BUDGET_SECONDS
 
-            updated = _pump_tracking(source, builder, target, watchdog)
+            updated = _pump_tracking(source, builders, target, watchdog)
             if updated is not None:
                 latest_qpos = updated
                 report_frames += 1
@@ -832,9 +956,13 @@ def run_bridge(
                 if blend_from is not None:
                     elapsed = time.monotonic() - blend_started
                     alpha = smoothstep(elapsed / STARTUP_BLEND_SECONDS)
-                    command = (blend_from + (latest_qpos - blend_from) * alpha).astype(
-                        np.float32
-                    )
+                    command = {
+                        side: (
+                            blend_from[side]
+                            + (latest_qpos[side] - blend_from[side]) * alpha
+                        ).astype(np.float32)
+                        for side in latest_qpos
+                    }
                     if alpha >= 1.0:
                         blend_from = None
                 target.send(command)
@@ -842,12 +970,15 @@ def run_bridge(
                 mode = "LIVE" if config.enable_motors else "DRY-RUN"
                 report_elapsed = max(time.monotonic() - report_started, 1e-6)
                 LOGGER.info(
-                    "%s side=%s input=%.1fHz qpos=[%+.3f, %+.3f]",
+                    "%s sides=%s input=%.1fHz %s",
                     mode,
-                    side,
+                    "+".join(sides),
                     report_frames / report_elapsed,
-                    float(latest_qpos.min()),
-                    float(latest_qpos.max()),
+                    " ".join(
+                        f"qpos[{side}]=[{float(qpos.min()):+.3f}, "
+                        f"{float(qpos.max()):+.3f}]"
+                        for side, qpos in sorted(latest_qpos.items())
+                    ),
                 )
                 last_report = now
                 report_started = time.monotonic()
@@ -860,7 +991,10 @@ def run_bridge(
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Retarget Axis Studio BVH hand data to one Wuji Hand 2."
+        description=(
+            "Retarget Axis Studio BVH hand data to the connected Wuji Hand 2 "
+            "devices (left, right, or both; auto-detected)."
+        )
     )
     parser.add_argument(
         "--udp-port",
@@ -880,7 +1014,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--hand-sn",
-        help="Wuji Hand 2 serial; required when multiple hands are discovered",
+        action="append",
+        dest="hand_sns",
+        metavar="SERIAL",
+        help="Wuji Hand 2 serial to use; repeat to pin both hands "
+        "(default: every discovered Wuji Hand 2)",
     )
     parser.add_argument(
         "--enable-motors",
@@ -903,7 +1041,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         udp_port=args.udp_port,
         bvh_rotation=args.bvh_rotation,
         avatar_name=args.avatar_name,
-        hand_sn=args.hand_sn,
+        hand_sns=tuple(args.hand_sns) if args.hand_sns else None,
         enable_motors=args.enable_motors,
     )
     try:

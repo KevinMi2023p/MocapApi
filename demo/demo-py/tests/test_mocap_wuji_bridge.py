@@ -153,6 +153,14 @@ def test_watchdog_expires_at_250_milliseconds():
         watchdog.require_fresh(10.251)
 
 
+def test_watchdog_reset_clears_the_last_valid_frame():
+    watchdog = bridge.FreshnessWatchdog()
+    watchdog.mark_valid(10.0)
+    watchdog.reset()
+    assert not watchdog.expired(20.0)
+    watchdog.require_fresh(20.0)
+
+
 def test_qpos_contract_rejects_wrong_shape_and_nonfinite_values():
     good = bridge.validate_qpos(np.arange(20, dtype=np.float64))
     assert good.shape == (20,)
@@ -165,8 +173,8 @@ def test_qpos_contract_rejects_wrong_shape_and_nonfinite_values():
         bridge.validate_qpos(bad)
 
 
-def test_wuji_send_preserves_firmware_order():
-    sent = []
+def test_wuji_send_preserves_firmware_order_per_hand():
+    sent = {"left": [], "right": []}
 
     class Command:
         def __init__(self, position, velocity, effort):
@@ -175,16 +183,31 @@ def test_wuji_send_preserves_firmware_order():
             self.effort = effort
 
     target = bridge.WujiTarget()
-    target.publisher = SimpleNamespace(send=sent.append)
-    target.enabled = True
+    for side in ("left", "right"):
+        unit = bridge.WujiHandUnit(sn=f"SN-{side}", side=side)
+        unit.publisher = SimpleNamespace(send=sent[side].append)
+        unit.enabled = True
+        target.hands[side] = unit
     target._wuji = {"JointCommand": Command}
-    qpos = np.linspace(-1.0, 1.0, 20, dtype=np.float32)
-    target.send(qpos)
+    left_qpos = np.linspace(-1.0, 1.0, 20, dtype=np.float32)
+    right_qpos = np.linspace(-0.5, 0.5, 20, dtype=np.float32)
+    target.send({"left": left_qpos, "right": right_qpos})
 
-    assert len(sent) == 1
-    assert [command.position for command in sent[0]] == pytest.approx(qpos.tolist())
-    assert all(command.velocity == 0.0 for command in sent[0])
-    assert all(command.effort == 0.0 for command in sent[0])
+    for side, qpos in (("left", left_qpos), ("right", right_qpos)):
+        assert len(sent[side]) == 1
+        assert [command.position for command in sent[side][0]] == pytest.approx(
+            qpos.tolist()
+        )
+        assert all(command.velocity == 0.0 for command in sent[side][0])
+        assert all(command.effort == 0.0 for command in sent[side][0])
+
+
+def test_wuji_send_requires_a_command_for_every_connected_hand():
+    target = bridge.WujiTarget()
+    target.hands["left"] = bridge.WujiHandUnit(sn="SN-left", side="left")
+    target.hands["right"] = bridge.WujiHandUnit(sn="SN-right", side="right")
+    with pytest.raises(RuntimeError, match="expected commands"):
+        target.send({"left": np.zeros(20, dtype=np.float32)})
 
 
 def test_actual_joint_positions_are_reordered_by_node_id():
@@ -194,23 +217,56 @@ def test_actual_joint_positions_are_reordered_by_node_id():
     ]
     frames = [SimpleNamespace(joints=list(reversed(entries))), None]
     target = bridge.WujiTarget()
-    target.joint_state_sub = SimpleNamespace(recv=lambda: frames.pop(0))
+    unit = bridge.WujiHandUnit(sn="SN-right", side="right")
+    unit.joint_state_sub = SimpleNamespace(recv=lambda: frames.pop(0))
+    target.hands["right"] = unit
 
     actual = target.latest_actual_positions()
 
-    np.testing.assert_allclose(actual, np.arange(20, dtype=np.float32))
+    assert set(actual) == {"right"}
+    np.testing.assert_allclose(actual["right"], np.arange(20, dtype=np.float32))
+
+
+def test_actual_joint_positions_wait_for_every_hand():
+    entries = [
+        SimpleNamespace(nid=nid, position=float(index))
+        for index, nid in enumerate(bridge.EXPECTED_WUJI_NIDS)
+    ]
+    right_frames = [SimpleNamespace(joints=entries), None, None]
+    left_frames = [None]
+    target = bridge.WujiTarget()
+    right = bridge.WujiHandUnit(sn="SN-right", side="right")
+    right.joint_state_sub = SimpleNamespace(recv=lambda: right_frames.pop(0))
+    left = bridge.WujiHandUnit(sn="SN-left", side="left")
+    left.joint_state_sub = SimpleNamespace(recv=lambda: left_frames.pop(0))
+    target.hands["right"] = right
+    target.hands["left"] = left
+
+    assert target.latest_actual_positions() is None
+
+    left_frames.extend([SimpleNamespace(joints=entries), None])
+    actual = target.latest_actual_positions()
+    assert set(actual) == {"left", "right"}
+
+
+def make_cleanup_target(actions):
+    target = bridge.WujiTarget()
+    for side in ("left", "right"):
+        unit = bridge.WujiHandUnit(sn=f"SN-{side}", side=side)
+        unit.hand = SimpleNamespace(
+            disable=lambda side=side: actions.append(f"disable-{side}"),
+            emergency_stop=lambda side=side: actions.append(f"stop-{side}"),
+        )
+        target.hands[side] = unit
+    target.manager = SimpleNamespace(
+        disconnect_all=lambda: actions.append("disconnect")
+    )
+    return target
 
 
 def test_wuji_cleanup_is_read_only_until_enable_is_attempted():
     actions = []
-    target = bridge.WujiTarget()
-    target.hand = SimpleNamespace(
-        disable=lambda: actions.append("disable"),
-        emergency_stop=lambda: actions.append("emergency_stop"),
-    )
-    target.manager = SimpleNamespace(
-        disconnect_all=lambda: actions.append("disconnect")
-    )
+    target = make_cleanup_target(actions)
 
     target.close()
 
@@ -219,81 +275,175 @@ def test_wuji_cleanup_is_read_only_until_enable_is_attempted():
 
 def test_wuji_cleanup_disables_after_a_partial_enable_attempt():
     actions = []
-    target = bridge.WujiTarget()
-    target.hand = SimpleNamespace(
-        disable=lambda: actions.append("disable"),
-        emergency_stop=lambda: actions.append("emergency_stop"),
-    )
-    target.manager = SimpleNamespace(
-        disconnect_all=lambda: actions.append("disconnect")
-    )
-    target.enable_attempted = True
+    target = make_cleanup_target(actions)
+    target.hands["left"].enable_attempted = True
 
     target.close()
 
-    assert actions == ["disable", "disconnect"]
-    assert not target.enable_attempted
+    assert actions == ["disable-left", "disconnect"]
+    assert not target.hands["left"].enable_attempted
+
+
+def test_wuji_cleanup_disables_every_enabled_hand():
+    actions = []
+    target = make_cleanup_target(actions)
+    for unit in target.hands.values():
+        unit.enabled = True
+
+    target.close()
+
+    assert set(actions[:-1]) == {"disable-left", "disable-right"}
+    assert actions[-1] == "disconnect"
+
+
+def make_fake_avatar(sides, posture_index):
+    joints = []
+    for side in sides:
+        for name in bridge.required_joint_names(side):
+            joints.append(
+                SimpleNamespace(
+                    get_name=lambda name=name: name,
+                    get_global_position=lambda: (0.1, 0.2, 0.3),
+                    get_global_rotation=lambda: (1.0, 0.0, 0.0, 0.0),
+                )
+            )
+    return SimpleNamespace(
+        get_name=lambda: "Actor",
+        get_avatar_posture_index=lambda: posture_index,
+        get_joints=lambda: joints,
+    )
+
+
+def test_mocap_source_polls_every_selected_side():
+    source = bridge.MocapSource(bridge.BridgeConfig(), ("left", "right"))
+    avatar = make_fake_avatar(("left", "right"), posture_index=7)
+    event = SimpleNamespace(
+        event_type="AvatarUpdated",
+        event_data=SimpleNamespace(avatar_handle=avatar),
+    )
+    source.mcp = SimpleNamespace(
+        MCPEventType=SimpleNamespace(AvatarUpdated="AvatarUpdated"),
+        MCPAvatar=lambda handle: handle,
+    )
+    source.app = SimpleNamespace(poll_next_event=lambda: [event])
+
+    poses = source.poll_latest()
+
+    assert set(poses) == {"left", "right"}
+    for side, raw in poses.items():
+        assert set(raw.positions) == set(bridge.required_joint_names(side))
+        assert set(raw.distal_rotations_xyzw) == set(bridge.FINGER_NAMES)
+    assert poses["left"].received_at == poses["right"].received_at
+    # The same posture index must not be consumed twice.
+    assert source.poll_latest() is None
+
+
+def test_mocap_source_rejects_duplicate_or_empty_sides():
+    with pytest.raises(bridge.ConfigurationError, match="unique"):
+        bridge.MocapSource(bridge.BridgeConfig(), ("left", "left"))
+    with pytest.raises(bridge.ConfigurationError, match="at least one"):
+        bridge.MocapSource(bridge.BridgeConfig(), ())
 
 
 def test_default_cli_is_dry_run():
     args = bridge.build_argument_parser().parse_args([])
     assert args.udp_port == 8088
     assert args.bvh_rotation == "YXZ"
+    assert args.hand_sns is None
     assert not args.enable_motors
 
 
+def test_cli_accepts_repeated_hand_serials():
+    args = bridge.build_argument_parser().parse_args(
+        ["--hand-sn", "SN-A", "--hand-sn", "SN-B"]
+    )
+    assert args.hand_sns == ["SN-A", "SN-B"]
+
+
+class EndTest(Exception):
+    pass
+
+
+class FakeSource:
+    def __init__(self, sides, stop_after=None):
+        self.sides = tuple(sides)
+        self.stop_after = stop_after
+        self.frame = 0
+        self.opened = False
+        self.closed = False
+
+    def open(self):
+        self.opened = True
+
+    def poll_latest(self):
+        self.frame += 1
+        if self.stop_after is not None and self.frame > self.stop_after:
+            raise EndTest
+        return {side: live_raw_pose(side, self.frame) for side in self.sides}
+
+    def close(self):
+        self.closed = True
+
+
+class FakeTarget:
+    def __init__(self, sides):
+        self.sides = tuple(sides)
+        self.actions = []
+        self.sent = []
+        self.prepared = False
+        self.enabled = False
+        self.closed = False
+        self.end_on_send = False
+
+    def connect(self):
+        self.actions.append("connect")
+        return self.sides
+
+    def retarget(self, side, keypoints):
+        self.actions.append(f"retarget-{side}")
+        offset = 0.1 if side == "left" else -0.1
+        return np.linspace(-0.5, 0.5, 20, dtype=np.float32) + np.float32(offset)
+
+    def reset_retarget(self):
+        self.actions.append("reset")
+
+    def prepare_actuation(self):
+        self.actions.append("prepare")
+        self.prepared = True
+
+    def latest_actual_positions(self):
+        return {side: np.zeros(20, dtype=np.float32) for side in self.sides}
+
+    def enable(self):
+        self.actions.append("enable")
+        self.enabled = True
+
+    def all_motors_enabled(self):
+        self.actions.append("diagnostics")
+        return True
+
+    def send(self, commands):
+        self.actions.append("send")
+        self.sent.append(commands)
+        if self.end_on_send:
+            raise EndTest
+
+    def close(self):
+        self.actions.append("close")
+        self.enabled = False
+        self.closed = True
+
+
 def test_run_bridge_dry_run_never_prepares_or_enables_motors(monkeypatch):
-    class EndTest(Exception):
-        pass
-
-    class FakeSource:
-        def __init__(self):
-            self.frame = 0
-            self.opened = False
-            self.closed = False
-
-        def open(self):
-            self.opened = True
-
-        def poll_latest(self):
-            self.frame += 1
-            if self.frame > bridge.TIP_CALIBRATION_FRAMES:
-                raise EndTest
-            return live_raw_pose("right", self.frame)
-
-        def close(self):
-            self.closed = True
-
-    class FakeTarget:
-        def __init__(self):
-            self.prepared = False
-            self.enabled = False
-            self.closed = False
-
-        def connect(self):
-            return "right"
-
-        def retarget(self, keypoints):
-            return np.zeros(20, dtype=np.float32)
-
-        def reset_retarget(self):
-            pass
-
-        def prepare_actuation(self):
-            self.prepared = True
-
-        def close(self):
-            self.closed = True
-
-    source = FakeSource()
-    target = FakeTarget()
+    source = FakeSource(("right",), stop_after=bridge.TIP_CALIBRATION_FRAMES)
+    target = FakeTarget(("right",))
     monkeypatch.setattr(bridge, "FRAME_BUDGET_SECONDS", 0.0)
 
     with pytest.raises(EndTest):
         bridge.run_bridge(
             bridge.BridgeConfig(),
-            source_factory=lambda _config, _side: source,
-            target_factory=lambda _sn: target,
+            source_factory=lambda _config, _sides: source,
+            target_factory=lambda _sns: target,
         )
 
     assert source.opened and source.closed
@@ -303,72 +453,16 @@ def test_run_bridge_dry_run_never_prepares_or_enables_motors(monkeypatch):
 
 
 def test_motor_path_prepares_enables_sends_and_always_cleans_up(monkeypatch):
-    class EndTest(Exception):
-        pass
-
-    class FakeSource:
-        def __init__(self):
-            self.frame = 0
-            self.closed = False
-
-        def open(self):
-            pass
-
-        def poll_latest(self):
-            self.frame += 1
-            return live_raw_pose("left", self.frame)
-
-        def close(self):
-            self.closed = True
-
-    class FakeTarget:
-        def __init__(self):
-            self.actions = []
-            self.enabled = False
-            self.closed = False
-
-        def connect(self):
-            self.actions.append("connect")
-            return "left"
-
-        def retarget(self, keypoints):
-            return np.linspace(-0.5, 0.5, 20, dtype=np.float32)
-
-        def reset_retarget(self):
-            self.actions.append("reset")
-
-        def prepare_actuation(self):
-            self.actions.append("prepare")
-
-        def latest_actual_positions(self):
-            return np.zeros(20, dtype=np.float32)
-
-        def enable(self):
-            self.actions.append("enable")
-            self.enabled = True
-
-        def all_motors_enabled(self):
-            self.actions.append("diagnostics")
-            return True
-
-        def send(self, qpos):
-            self.actions.append("send")
-            raise EndTest
-
-        def close(self):
-            self.actions.append("close")
-            self.enabled = False
-            self.closed = True
-
-    source = FakeSource()
-    target = FakeTarget()
+    source = FakeSource(("left",))
+    target = FakeTarget(("left",))
+    target.end_on_send = True
     monkeypatch.setattr(bridge, "FRAME_BUDGET_SECONDS", 0.0)
 
     with pytest.raises(EndTest):
         bridge.run_bridge(
             bridge.BridgeConfig(enable_motors=True),
-            source_factory=lambda _config, _side: source,
-            target_factory=lambda _sn: target,
+            source_factory=lambda _config, _sides: source,
+            target_factory=lambda _sns: target,
         )
 
     assert target.actions.index("prepare") < target.actions.index("enable")
@@ -379,13 +473,211 @@ def test_motor_path_prepares_enables_sends_and_always_cleans_up(monkeypatch):
     assert not target.enabled
 
 
-def test_real_wuji_retarget_contract():
+def test_run_bridge_drives_both_hands(monkeypatch):
+    source = FakeSource(("left", "right"))
+    target = FakeTarget(("left", "right"))
+    target.end_on_send = True
+    monkeypatch.setattr(bridge, "FRAME_BUDGET_SECONDS", 0.0)
+
+    with pytest.raises(EndTest):
+        bridge.run_bridge(
+            bridge.BridgeConfig(enable_motors=True),
+            source_factory=lambda _config, _sides: source,
+            target_factory=lambda _sns: target,
+        )
+
+    assert len(target.sent) == 1
+    commands = target.sent[0]
+    assert set(commands) == {"left", "right"}
+    for qpos in commands.values():
+        assert qpos.shape == (20,)
+        assert np.isfinite(qpos).all()
+    assert "retarget-left" in target.actions
+    assert "retarget-right" in target.actions
+    assert target.closed and source.closed
+
+
+def test_preflight_recovers_from_a_tracking_gap(monkeypatch, caplog):
+    class GapSource(FakeSource):
+        def __init__(self):
+            super().__init__(
+                ("left",), stop_after=bridge.TIP_CALIBRATION_FRAMES * 2
+            )
+            self.gap_until = None
+
+        def poll_latest(self):
+            if self.frame == 5 and self.gap_until is None:
+                self.gap_until = time.monotonic() + 1.5 * (
+                    bridge.TRACKING_TIMEOUT_SECONDS
+                )
+            if self.gap_until is not None and time.monotonic() < self.gap_until:
+                return None
+            return super().poll_latest()
+
+    source = GapSource()
+    target = FakeTarget(("left",))
+    monkeypatch.setattr(bridge, "FRAME_BUDGET_SECONDS", 0.0)
+
+    with caplog.at_level("WARNING", logger="mocap_wuji_bridge"):
+        with pytest.raises(EndTest):
+            bridge.run_bridge(
+                bridge.BridgeConfig(),
+                source_factory=lambda _config, _sides: source,
+                target_factory=lambda _sns: target,
+            )
+
+    assert any(
+        "Tracking gap" in record.getMessage()
+        and "restarting calibration" in record.getMessage()
+        for record in caplog.records
+    )
+    # The gap discarded the first five samples, so calibration needed a full
+    # fresh window before the dry-run loop could reach stop_after.
+    assert source.frame > bridge.TIP_CALIBRATION_FRAMES + 5
+    assert "reset" in target.actions
+    assert target.closed and source.closed
+
+
+class FakeWujiModule:
+    """Minimal stand-in for the wuji_sdk import surface used by connect()."""
+
+    class DeviceType:
+        WujiHand2 = "WujiHand2"
+        WujiGlove = "WujiGlove"
+
+    class HandModel:
+        WujiHand2 = "HandModel.WujiHand2"
+
+    class Handedness:
+        Left = "Handedness.Left"
+        Right = "Handedness.Right"
+
+    class JointCommand:
+        def __init__(self, position, velocity, effort):
+            self.position = position
+            self.velocity = velocity
+            self.effort = effort
+
+    class ConnectOptions:
+        def __init__(self, enable_bridge=True):
+            self.enable_bridge = enable_bridge
+
+    class RetargetSession:
+        def __init__(self, side):
+            self.side = side
+
+        @classmethod
+        def for_hand(cls, hand_model, side):
+            return cls(side)
+
+    class WujiHand2:
+        def __init__(self, sn, side, online=bridge.TOTAL_WUJI_JOINTS):
+            self.sn = sn
+            self.side = side
+            self.online = online
+
+        def online_joints_count(self):
+            return SimpleNamespace(get=lambda: self.online)
+
+        def handedness(self):
+            return SimpleNamespace(get=lambda: self.side)
+
+    class SdkManager:
+        current = None
+
+        def __init__(self, devices):
+            self.devices = devices
+            self.connections = []
+
+        @classmethod
+        def instance(cls):
+            return cls.current
+
+        def scan(self):
+            return [
+                SimpleNamespace(sn=sn, device_type=FakeWujiModule.DeviceType.WujiHand2)
+                for sn, _side in self.devices
+            ]
+
+        def connect(self, *, sn, device_name, options=None):
+            self.connections.append((sn, device_name, options))
+            side = dict(self.devices)[sn]
+            return FakeWujiModule.WujiHand2(sn, side)
+
+        def disconnect_all(self):
+            self.connections.clear()
+
+
+@pytest.fixture
+def fake_wuji(monkeypatch):
+    module = FakeWujiModule()
+    monkeypatch.setitem(sys.modules, "wuji_sdk", module)
+
+    def install(devices):
+        FakeWujiModule.SdkManager.current = FakeWujiModule.SdkManager(devices)
+        return FakeWujiModule.SdkManager.current
+
+    yield install
+    FakeWujiModule.SdkManager.current = None
+
+
+def test_connect_auto_detects_a_single_left_hand(fake_wuji):
+    manager = fake_wuji([("SN-LEFT", "left")])
+    target = bridge.WujiTarget()
+
+    assert target.connect() == ("left",)
+    assert set(target.hands) == {"left"}
+    assert target.hands["left"].session.side == FakeWujiModule.Handedness.Left
+    # The multi-client DeviceBridge must stay off for every connection.
+    assert all(options.enable_bridge is False for _, _, options in manager.connections)
+
+
+def test_connect_auto_detects_both_hands(fake_wuji):
+    fake_wuji([("SN-RIGHT", "right"), ("SN-LEFT", "left")])
+    target = bridge.WujiTarget()
+
+    assert target.connect() == ("left", "right")
+    assert target.hands["left"].sn == "SN-LEFT"
+    assert target.hands["right"].sn == "SN-RIGHT"
+    assert target.hands["right"].session.side == FakeWujiModule.Handedness.Right
+
+
+def test_connect_rejects_two_hands_with_the_same_side(fake_wuji):
+    fake_wuji([("SN-A", "left"), ("SN-B", "left")])
+    with pytest.raises(bridge.ConfigurationError, match="two left"):
+        bridge.WujiTarget().connect()
+
+
+def test_connect_rejects_zero_hands(fake_wuji):
+    fake_wuji([])
+    with pytest.raises(bridge.ConfigurationError, match="no Wuji Hand 2"):
+        bridge.WujiTarget().connect()
+
+
+def test_connect_requires_requested_serials_to_be_discovered(fake_wuji):
+    fake_wuji([("SN-LEFT", "left")])
+    with pytest.raises(bridge.ConfigurationError, match="SN-MISSING"):
+        bridge.WujiTarget(hand_sns=("SN-MISSING",)).connect()
+
+
+def test_connect_selects_only_the_requested_serial(fake_wuji):
+    fake_wuji([("SN-RIGHT", "right"), ("SN-LEFT", "left")])
+    target = bridge.WujiTarget(hand_sns=("SN-RIGHT",))
+
+    assert target.connect() == ("right",)
+    assert set(target.hands) == {"right"}
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+def test_real_wuji_retarget_contract(side):
     wuji_sdk = pytest.importorskip("wuji_sdk")
-    builder = bridge.HandLandmarkBuilder("right", calibration_frames=1)
-    keypoints = builder.build(make_raw_pose("right")).keypoints
+    builder = bridge.HandLandmarkBuilder(side, calibration_frames=1)
+    keypoints = builder.build(make_raw_pose(side)).keypoints
     session = wuji_sdk.RetargetSession.for_hand(
         wuji_sdk.HandModel.WujiHand2,
-        side=wuji_sdk.Handedness.Right,
+        side=wuji_sdk.Handedness.Left
+        if side == "left"
+        else wuji_sdk.Handedness.Right,
     )
     qpos = session.step(keypoints)
     assert qpos.shape == (20,)

@@ -1,7 +1,8 @@
 # MocapApi Python demos
 
 These demos receive Axis Studio BVH data through MocapApi. The
-`mocap_wuji_bridge.py` demo retargets one Axis Studio hand to one Wuji Hand 2.
+`mocap_wuji_bridge.py` demo retargets the Axis Studio hands to the connected
+Wuji Hand 2 devices — left, right, or both, auto-detected from the hardware.
 For the native, single-process C++ implementation used for Wuji bring-up, see
 [`../mocap-wuji-cpp`](../mocap-wuji-cpp).
 
@@ -15,7 +16,7 @@ MocapApi is a network receiver; it does **not** open `.bvh` files directly:
 - Linux on x86_64 or aarch64
 - Python 3.10 or newer
 - Axis Studio on a host that can send UDP packets to this machine
-- One discoverable Wuji Hand 2
+- One or two discoverable Wuji Hand 2 devices (at most one per side)
 
 Create an environment and install the local MocapApi wrapper plus the versions
 used by the bridge:
@@ -87,17 +88,20 @@ Start in dry-run mode:
 python mocap_wuji_bridge.py
 ```
 
-Dry-run is the default. The bridge connects to exactly one Wuji Hand 2 to
-discover whether it is a left or right hand, selects the corresponding side of
-the BVH avatar, and runs the complete retargeting pipeline. It does not
-configure the motors, enable the hand, or publish joint commands.
+Dry-run is the default. The bridge connects to every discovered Wuji Hand 2
+(one or two, at most one per side), reads whether each is a left or right
+hand, selects the corresponding side(s) of the BVH avatar, and runs the
+complete retargeting pipeline for each connected hand. It does not configure
+the motors, enable the hands, or publish joint commands.
 
-If more than one avatar or Hand 2 is available, choose explicitly:
+If more than one avatar is available, or you want specific hands, choose
+explicitly (`--hand-sn` may be repeated to pin both hands):
 
 ```bash
 python mocap_wuji_bridge.py \
   --avatar-name "AvatarName" \
-  --hand-sn "HAND_SERIAL"
+  --hand-sn "LEFT_HAND_SERIAL" \
+  --hand-sn "RIGHT_HAND_SERIAL"
 ```
 
 Only after dry-run reports valid, continuously updating frames should motor
@@ -107,17 +111,19 @@ control be enabled:
 python mocap_wuji_bridge.py --enable-motors
 ```
 
-The motor-enabled path waits for 30 valid mocap frames, verifies all 20 hand
-joints, enables the hand, and blends from its current joint positions into the
-retargeted pose. Keep the physical workspace clear and be ready to remove
-power.
+The motor-enabled path waits for 30 valid mocap frames, verifies all 20 joints
+of every connected hand, enables the hands, and blends from their current
+joint positions into the retargeted pose. Keep the physical workspace clear
+and be ready to remove power.
 
 Motor control fails closed:
 
 - A valid, fresh mocap frame is required at all times.
-- After 250 ms without one, the bridge disables the hand and exits nonzero.
-- Mocap, retargeting, publishing, or device errors also disable the hand.
-- `Ctrl+C` disables and disconnects the hand.
+- During preflight (before motors are armed) a tracking gap only restarts
+  calibration; once preflight completes, 250 ms without a fresh frame
+  disables the hands and exits nonzero.
+- Mocap, retargeting, publishing, or device errors also disable the hands.
+- `Ctrl+C` disables and disconnects the hands.
 - The process never reconnects or re-enables automatically; restart it
   explicitly after correcting the problem.
 
@@ -136,10 +142,11 @@ Run `python mocap_wuji_bridge.py --help` for the complete option list.
 
 ### No hand or ambiguous hand
 
-- Confirm that exactly one Wuji Hand 2 is connected and discoverable.
-- When multiple Hand 2 devices are present, pass `--hand-sn`.
-- The bridge derives the BVH side from the physical hand; it does not
-  arbitrarily choose left or right.
+- Confirm that at least one Wuji Hand 2 is connected and discoverable.
+- The bridge derives each BVH side from the physical hand's handedness; it
+  does not arbitrarily choose left or right.
+- Two hands of the same side (or more than two devices) are rejected; pass
+  `--hand-sn` (repeatable) to select the ones to use.
 
 ### Interface or native-library errors
 
