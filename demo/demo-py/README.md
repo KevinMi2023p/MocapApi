@@ -116,6 +116,26 @@ of every connected hand, enables the hands, and blends from their current
 joint positions into the retargeted pose. Keep the physical workspace clear
 and be ready to remove power.
 
+While the motors are active, the bridge records voltage and current from every
+Wuji joint-diagnostics frame. Press `Ctrl+C` to stop the API and disable the
+hand. Cleanup then saves a timestamped Matplotlib PNG in the current directory
+and opens the graph. The graph contains bus voltage, summed absolute motor
+current, and estimated motor electrical load for each connected hand. Choose a
+fixed output name, or save without opening a window on a headless machine:
+
+```bash
+python mocap_wuji_bridge.py --enable-motors \
+  --power-plot wuji_power.png
+
+python mocap_wuji_bridge.py --enable-motors \
+  --no-show-power-plot
+```
+
+The reported amps are the sum of the absolute current feedback from the 20
+motors. Estimated watts are `sum(abs(joint current) * joint bus voltage)`.
+These values show relative hand motor load; they are not a calibrated
+measurement of current or power at the external supply input.
+
 Motor control fails closed:
 
 - A valid, fresh mocap frame is required at all times.

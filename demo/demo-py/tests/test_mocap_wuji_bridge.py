@@ -249,6 +249,68 @@ def test_actual_joint_positions_wait_for_every_hand():
     assert set(actual) == {"left", "right"}
 
 
+def make_diagnostic_frame(currents, voltages, *, enabled=True):
+    return SimpleNamespace(
+        joints=[
+            SimpleNamespace(
+                nid=nid,
+                current=current,
+                vbus_v_fb=voltage,
+                status_word=SimpleNamespace(ext_state=2 if enabled else 1),
+            )
+            for nid, current, voltage in zip(
+                bridge.EXPECTED_WUJI_NIDS, currents, voltages
+            )
+        ]
+    )
+
+
+def test_power_reading_uses_median_bus_voltage_and_absolute_motor_current():
+    currents = np.linspace(-1.0, 1.0, bridge.TOTAL_WUJI_JOINTS)
+    voltages = np.full(bridge.TOTAL_WUJI_JOINTS, 24.0)
+    voltages[-1] = 120.0
+    frames = [make_diagnostic_frame(currents, voltages), None]
+    target = bridge.WujiTarget()
+    unit = bridge.WujiHandUnit(sn="SN-right", side="right")
+    unit.diagnostic_sub = SimpleNamespace(recv=lambda: frames.pop(0))
+    target.hands["right"] = unit
+
+    readings = target.latest_power_readings()
+
+    assert set(readings) == {"right"}
+    reading = readings["right"]
+    assert reading.voltage_volts == pytest.approx(24.0)
+    assert reading.current_amps == pytest.approx(np.abs(currents).sum())
+    assert reading.power_watts == pytest.approx(
+        np.sum(np.abs(currents) * voltages)
+    )
+    assert unit.motors_enabled
+
+
+def test_power_recorder_uses_one_shared_elapsed_timestamp_for_both_hands():
+    recorder = bridge.PowerRecorder()
+    recorder.record(
+        {
+            "left": bridge.PowerReading(24.0, 2.0, 48.0),
+            "right": bridge.PowerReading(23.5, 3.0, 70.5),
+        },
+        recorded_at=10.0,
+    )
+    recorder.record(
+        {"left": bridge.PowerReading(23.8, 2.5, 59.5)},
+        recorded_at=10.25,
+    )
+
+    assert [sample.side for sample in recorder.samples] == [
+        "left",
+        "right",
+        "left",
+    ]
+    assert [sample.elapsed_seconds for sample in recorder.samples] == pytest.approx(
+        [0.0, 0.0, 0.25]
+    )
+
+
 def make_cleanup_target(actions):
     target = bridge.WujiTarget()
     for side in ("left", "right"):
@@ -427,6 +489,10 @@ class FakeTarget:
         self.sent.append(commands)
         if self.end_on_send:
             raise EndTest
+
+    def latest_power_readings(self):
+        self.actions.append("power")
+        return {}
 
     def close(self):
         self.actions.append("close")

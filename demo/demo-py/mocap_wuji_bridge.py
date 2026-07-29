@@ -19,7 +19,9 @@ from __future__ import annotations
 import argparse
 import contextlib
 from dataclasses import dataclass, field
+from datetime import datetime
 import logging
+from pathlib import Path
 import time
 from typing import Any, Callable, Mapping, Sequence
 
@@ -113,6 +115,8 @@ class BridgeConfig:
     avatar_name: str | None = None
     hand_sns: tuple[str, ...] | None = None
     enable_motors: bool = False
+    power_plot: str | None = None
+    show_power_plot: bool = True
 
 
 @dataclass(frozen=True)
@@ -131,6 +135,114 @@ class HandLandmarkFrame:
     received_at: float
     keypoints: npt.NDArray[np.float32]
     calibration_ready: bool
+
+
+@dataclass(frozen=True)
+class PowerReading:
+    """One whole-hand reading derived from per-joint diagnostics."""
+
+    voltage_volts: float
+    current_amps: float
+    power_watts: float
+
+
+@dataclass(frozen=True)
+class PowerSample:
+    elapsed_seconds: float
+    side: str
+    voltage_volts: float
+    current_amps: float
+    power_watts: float
+
+
+class PowerRecorder:
+    """Collect Wuji electrical telemetry and render it when the bridge stops."""
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic):
+        self.clock = clock
+        self.started_at: float | None = None
+        self.samples: list[PowerSample] = []
+
+    def record(
+        self,
+        readings: Mapping[str, PowerReading],
+        recorded_at: float | None = None,
+    ) -> None:
+        if not readings:
+            return
+        timestamp = self.clock() if recorded_at is None else recorded_at
+        if self.started_at is None:
+            self.started_at = timestamp
+        elapsed = timestamp - self.started_at
+        for side, reading in sorted(readings.items()):
+            self.samples.append(
+                PowerSample(
+                    elapsed_seconds=elapsed,
+                    side=side,
+                    voltage_volts=reading.voltage_volts,
+                    current_amps=reading.current_amps,
+                    power_watts=reading.power_watts,
+                )
+            )
+
+    def render(
+        self,
+        output_path: str | None = None,
+        show: bool = True,
+    ) -> Path | None:
+        if not self.samples:
+            return None
+
+        # Import lazily so receive-only and dry-run operation do not require a
+        # graphical backend.
+        import matplotlib.pyplot as plt
+
+        if output_path is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            path = Path.cwd() / f"wuji_power_{timestamp}.png"
+        else:
+            path = Path(output_path).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        figure, axes = plt.subplots(3, 1, sharex=True, figsize=(11, 8))
+        fields = (
+            ("voltage_volts", "Bus voltage (V)"),
+            ("current_amps", "Summed |motor current| (A)"),
+            ("power_watts", "Estimated motor load (W)"),
+        )
+        sides = sorted({sample.side for sample in self.samples})
+        for side in sides:
+            side_samples = [
+                sample for sample in self.samples if sample.side == side
+            ]
+            elapsed = [sample.elapsed_seconds for sample in side_samples]
+            for axis, (field_name, label) in zip(axes, fields):
+                axis.plot(
+                    elapsed,
+                    [getattr(sample, field_name) for sample in side_samples],
+                    label=side.capitalize(),
+                    linewidth=1.5,
+                )
+                axis.set_ylabel(label)
+                axis.grid(True, alpha=0.3)
+        axes[-1].set_xlabel("Time since first power sample (s)")
+        axes[0].legend(loc="best")
+        figure.suptitle("Wuji Hand 2 electrical telemetry")
+        figure.text(
+            0.5,
+            0.01,
+            "Current is the sum of absolute per-motor feedback; "
+            "power is Σ(|current| × bus voltage), not supply-input wattage.",
+            ha="center",
+            fontsize=9,
+        )
+        figure.tight_layout(rect=(0.0, 0.04, 1.0, 0.96))
+        figure.savefig(path, dpi=150)
+        LOGGER.info("Saved Wuji power graph to %s", path.resolve())
+        if show:
+            plt.show()
+        plt.close(figure)
+        return path.resolve()
 
 
 class FreshnessWatchdog:
@@ -707,19 +819,67 @@ class WujiTarget:
     def all_motors_enabled(self) -> bool:
         if not self.hands:
             return False
+        self.latest_power_readings()
+        return all(unit.motors_enabled for unit in self.hands.values())
+
+    @staticmethod
+    def _power_reading_from_diagnostics(
+        unit: WujiHandUnit, frame: Any
+    ) -> PowerReading:
+        if len(frame.joints) != TOTAL_WUJI_JOINTS:
+            raise ConfigurationError(
+                f"{unit.side} diagnostic frame contains "
+                f"{len(frame.joints)}/{TOTAL_WUJI_JOINTS} joints"
+            )
+        by_nid = {entry.nid: entry for entry in frame.joints}
+        if set(by_nid) != set(EXPECTED_WUJI_NIDS):
+            raise ConfigurationError(
+                f"{unit.side} diagnostic frame has unexpected node IDs: "
+                f"{sorted(by_nid)}"
+            )
+
+        entries = [by_nid[nid] for nid in EXPECTED_WUJI_NIDS]
+        currents = np.asarray([entry.current for entry in entries], dtype=np.float64)
+        voltages = np.asarray(
+            [entry.vbus_v_fb for entry in entries], dtype=np.float64
+        )
+        if (
+            not np.isfinite(currents).all()
+            or not np.isfinite(voltages).all()
+            or np.any(voltages < 0.0)
+        ):
+            raise FrameValidationError(
+                f"Wuji {unit.side} power telemetry is invalid"
+            )
+
+        # Every motor reports the same supply rail.  The median is resistant to
+        # one noisy feedback channel; load is estimated per motor before sum.
+        absolute_currents = np.abs(currents)
+        return PowerReading(
+            voltage_volts=float(np.median(voltages)),
+            current_amps=float(absolute_currents.sum()),
+            power_watts=float(np.sum(absolute_currents * voltages)),
+        )
+
+    def latest_power_readings(self) -> dict[str, PowerReading]:
+        """Drain diagnostic streams and return new whole-hand power readings."""
+
+        readings: dict[str, PowerReading] = {}
         for unit in self.hands.values():
             if unit.diagnostic_sub is None:
-                return False
+                continue
             frame = self._drain_latest(unit.diagnostic_sub)
             if frame is None:
                 continue
+            reading = self._power_reading_from_diagnostics(unit, frame)
             unit.motors_enabled = (
                 len(frame.joints) == TOTAL_WUJI_JOINTS
                 and {entry.nid for entry in frame.joints}
                 == set(EXPECTED_WUJI_NIDS)
                 and all(entry.status_word.ext_state == 2 for entry in frame.joints)
             )
-        return all(unit.motors_enabled for unit in self.hands.values())
+            readings[unit.side] = reading
+        return readings
 
     def send(self, commands: Mapping[str, Any]) -> None:
         if set(commands) != set(self.hands):
@@ -856,6 +1016,7 @@ def run_bridge(
 ) -> None:
     target = target_factory(config.hand_sns)
     source: MocapSource | None = None
+    power_recorder = PowerRecorder()
     try:
         sides = target.connect()
         source = source_factory(config, sides)
@@ -966,6 +1127,7 @@ def run_bridge(
                     if alpha >= 1.0:
                         blend_from = None
                 target.send(command)
+                power_recorder.record(target.latest_power_readings())
             if now - last_report >= 1.0 and latest_qpos is not None:
                 mode = "LIVE" if config.enable_motors else "DRY-RUN"
                 report_elapsed = max(time.monotonic() - report_started, 1e-6)
@@ -987,6 +1149,20 @@ def run_bridge(
         target.close()
         if source is not None:
             source.close()
+        if power_recorder.samples:
+            try:
+                power_recorder.render(
+                    output_path=config.power_plot,
+                    show=config.show_power_plot,
+                )
+            except Exception:
+                # Plotting must never interfere with fail-closed hand cleanup
+                # or hide the bridge error that caused cleanup.
+                LOGGER.exception("Could not render the Wuji power graph")
+        elif config.enable_motors:
+            LOGGER.warning(
+                "No Wuji power samples were received; no graph was generated"
+            )
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -1025,6 +1201,16 @@ def build_argument_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="configure, enable, and command motors (default is dry-run)",
     )
+    parser.add_argument(
+        "--power-plot",
+        metavar="PNG",
+        help="power graph path (default: timestamped PNG in the current directory)",
+    )
+    parser.add_argument(
+        "--no-show-power-plot",
+        action="store_true",
+        help="save the power graph without opening a Matplotlib window on stop",
+    )
     return parser
 
 
@@ -1043,6 +1229,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         avatar_name=args.avatar_name,
         hand_sns=tuple(args.hand_sns) if args.hand_sns else None,
         enable_motors=args.enable_motors,
+        power_plot=args.power_plot,
+        show_power_plot=not args.no_show_power_plot,
     )
     try:
         run_bridge(config)
