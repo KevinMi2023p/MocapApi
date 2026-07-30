@@ -20,8 +20,14 @@ import argparse
 import contextlib
 from dataclasses import dataclass, field
 from datetime import datetime
+import ipaddress
+import json
 import logging
+import os
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 import time
 from typing import Any, Callable, Mapping, Sequence
 
@@ -114,9 +120,265 @@ class BridgeConfig:
     bvh_rotation: str = DEFAULT_ROTATION
     avatar_name: str | None = None
     hand_sns: tuple[str, ...] | None = None
+    auto_routes: bool = True
     enable_motors: bool = False
     power_plot: str | None = None
     show_power_plot: bool = True
+
+
+@dataclass(frozen=True)
+class InterfaceAddress:
+    name: str
+    address: ipaddress.IPv4Address
+    network: ipaddress.IPv4Network
+
+
+@dataclass(frozen=True)
+class InstalledRoute:
+    destination: ipaddress.IPv4Address
+    interface: str
+
+
+def parse_device_ipv4(address: Any) -> ipaddress.IPv4Address | None:
+    """Return the IPv4 host from a Wuji discovery address such as IP:port."""
+
+    text = str(address)
+    host = text.rsplit(":", 1)[0]
+    try:
+        parsed = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, ipaddress.IPv4Address) else None
+
+
+class TemporaryHandRoutes:
+    """Install and remove host routes for hands on duplicate Ethernet subnets."""
+
+    def __init__(self, enabled: bool = True) -> None:
+        self.enabled = enabled
+        self.ip_command = shutil.which("ip")
+        self.ping_command = shutil.which("ping")
+        self.installed: list[InstalledRoute] = []
+
+    def configure(self, devices: Sequence[Any]) -> None:
+        if not self.enabled or sys.platform != "linux":
+            return
+        if self.ip_command is None or self.ping_command is None:
+            return
+
+        interfaces = self._interface_addresses()
+        route_plans: list[tuple[ipaddress.IPv4Address, InterfaceAddress]] = []
+
+        for device in devices:
+            destination = parse_device_ipv4(device.address)
+            if destination is None:
+                continue
+
+            candidates = [
+                interface
+                for interface in interfaces
+                if destination in interface.network
+            ]
+            candidate_names = {candidate.name for candidate in candidates}
+            if len(candidate_names) < 2:
+                continue
+
+            reachable = [
+                candidate
+                for candidate in candidates
+                if self._is_reachable(destination, candidate.name)
+            ]
+            reachable_names = {candidate.name for candidate in reachable}
+            if len(reachable_names) != 1:
+                names = ", ".join(sorted(candidate_names))
+                raise ConfigurationError(
+                    f"cannot determine which interface reaches {destination}; "
+                    f"probed {names} and got {len(reachable_names)} unique replies. "
+                    "Connect both hands through one Ethernet switch, or configure "
+                    "a /32 host route for each hand manually."
+                )
+
+            selected = next(
+                candidate
+                for candidate in reachable
+                if candidate.name in reachable_names
+            )
+            existing = self._exact_host_routes(destination)
+            if existing:
+                existing_interfaces = {
+                    str(route.get("dev"))
+                    for route in existing
+                    if route.get("dev") is not None
+                }
+                if selected.name not in existing_interfaces:
+                    raise ConfigurationError(
+                        f"existing host route for {destination} uses "
+                        f"{', '.join(sorted(existing_interfaces)) or 'an unknown interface'}, "
+                        f"but the hand replies on {selected.name}. Fix or remove the "
+                        "existing route before running the bridge."
+                    )
+                continue
+
+            route_plans.append((destination, selected))
+
+        if not route_plans:
+            return
+
+        LOGGER.warning(
+            "Multiple Ethernet interfaces share the Wuji hand subnet; "
+            "administrative access is needed for temporary per-hand routes"
+        )
+        for destination, interface in route_plans:
+            self._run_privileged(
+                "route",
+                "replace",
+                f"{destination}/32",
+                "dev",
+                interface.name,
+                "src",
+                str(interface.address),
+            )
+            self.installed.append(
+                InstalledRoute(
+                    destination=destination,
+                    interface=interface.name,
+                )
+            )
+            LOGGER.info(
+                "Installed temporary route: %s via %s",
+                destination,
+                interface.name,
+            )
+
+    def restore(self) -> None:
+        for route in reversed(self.installed):
+            try:
+                result = self._run_privileged(
+                    "route",
+                    "del",
+                    f"{route.destination}/32",
+                    "dev",
+                    route.interface,
+                    check=False,
+                )
+            except Exception:
+                LOGGER.exception(
+                    "Could not remove temporary route for %s; remove it "
+                    "manually with: sudo ip route del %s/32 dev %s",
+                    route.destination,
+                    route.destination,
+                    route.interface,
+                )
+                continue
+            if result.returncode == 0:
+                LOGGER.info(
+                    "Removed temporary route for %s", route.destination
+                )
+            else:
+                LOGGER.error(
+                    "Could not remove temporary route for %s; remove it "
+                    "manually with: sudo ip route del %s/32 dev %s",
+                    route.destination,
+                    route.destination,
+                    route.interface,
+                )
+        self.installed.clear()
+
+    def _interface_addresses(self) -> list[InterfaceAddress]:
+        result = subprocess.run(
+            [self.ip_command, "-j", "-4", "address", "show", "up"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        interfaces = []
+        for link in json.loads(result.stdout):
+            interface_name = link.get("ifname")
+            if not interface_name:
+                continue
+            for address_info in link.get("addr_info", []):
+                if (
+                    address_info.get("family") != "inet"
+                    or address_info.get("scope") != "global"
+                ):
+                    continue
+                address = ipaddress.IPv4Address(address_info["local"])
+                network = ipaddress.IPv4Network(
+                    f"{address}/{address_info['prefixlen']}",
+                    strict=False,
+                )
+                interfaces.append(
+                    InterfaceAddress(
+                        name=interface_name,
+                        address=address,
+                        network=network,
+                    )
+                )
+        return interfaces
+
+    def _is_reachable(
+        self,
+        destination: ipaddress.IPv4Address,
+        interface: str,
+    ) -> bool:
+        result = subprocess.run(
+            [
+                self.ping_command,
+                "-4",
+                "-c",
+                "1",
+                "-W",
+                "1",
+                "-I",
+                interface,
+                str(destination),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return result.returncode == 0
+
+    def _exact_host_routes(
+        self,
+        destination: ipaddress.IPv4Address,
+    ) -> list[dict[str, Any]]:
+        result = subprocess.run(
+            [
+                self.ip_command,
+                "-j",
+                "route",
+                "show",
+                "exact",
+                f"{destination}/32",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return json.loads(result.stdout)
+
+    def _run_privileged(
+        self,
+        *arguments: str,
+        check: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        command = [self.ip_command, *arguments]
+        if os.geteuid() != 0:
+            sudo_command = shutil.which("sudo")
+            if sudo_command is None:
+                raise ConfigurationError(
+                    "temporary hand routes require root privileges, but sudo "
+                    "was not found. Configure the routes manually or run with "
+                    "--no-auto-routes."
+                )
+            command.insert(0, sudo_command)
+        try:
+            return subprocess.run(command, check=check)
+        except subprocess.CalledProcessError as exc:
+            raise ConfigurationError(
+                "failed to configure temporary hand routes. Configure the "
+                "routes manually or run with --no-auto-routes."
+            ) from exc
 
 
 @dataclass(frozen=True)
@@ -660,11 +922,21 @@ class WujiTarget:
     keeps one retarget session per hand.
     """
 
-    def __init__(self, hand_sns: Sequence[str] | None = None):
+    def __init__(
+        self,
+        hand_sns: Sequence[str] | None = None,
+        auto_routes: bool = True,
+        temporary_routes: TemporaryHandRoutes | None = None,
+    ):
         self.hand_sns = tuple(hand_sns) if hand_sns else None
         self.manager: Any = None
         self.hands: dict[str, WujiHandUnit] = {}
         self._wuji: dict[str, Any] = {}
+        self.temporary_routes = (
+            temporary_routes
+            if temporary_routes is not None
+            else TemporaryHandRoutes(enabled=auto_routes)
+        )
 
     def connect(self) -> tuple[str, ...]:
         from wuji_sdk import (
@@ -705,6 +977,8 @@ class WujiTarget:
                 f"found {len(devices)} Wuji Hand 2 devices; pass --hand-sn "
                 "(repeatable) to select at most two"
             )
+
+        self.temporary_routes.configure(devices)
 
         # This process is the device's only client, and the multi-client
         # DeviceBridge floods the host with tasks right when preflight needs a
@@ -923,8 +1197,13 @@ class WujiTarget:
                     with contextlib.suppress(Exception):
                         resource.close()
         if self.manager is not None:
-            with contextlib.suppress(Exception):
-                self.manager.disconnect_all()
+            try:
+                with contextlib.suppress(Exception):
+                    self.manager.disconnect_all()
+            finally:
+                self.temporary_routes.restore()
+        else:
+            self.temporary_routes.restore()
 
 
 def _pump_tracking(
@@ -1012,9 +1291,11 @@ def run_bridge(
     source_factory: Callable[
         [BridgeConfig, Sequence[str]], MocapSource
     ] = MocapSource,
-    target_factory: Callable[[Sequence[str] | None], WujiTarget] = WujiTarget,
+    target_factory: Callable[
+        [Sequence[str] | None, bool], WujiTarget
+    ] = WujiTarget,
 ) -> None:
-    target = target_factory(config.hand_sns)
+    target = target_factory(config.hand_sns, config.auto_routes)
     source: MocapSource | None = None
     power_recorder = PowerRecorder()
     try:
@@ -1202,6 +1483,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="configure, enable, and command motors (default is dry-run)",
     )
     parser.add_argument(
+        "--no-auto-routes",
+        action="store_true",
+        help=(
+            "do not temporarily add per-hand routes when separate Ethernet "
+            "interfaces share the same subnet"
+        ),
+    )
+    parser.add_argument(
         "--power-plot",
         metavar="PNG",
         help="power graph path (default: timestamped PNG in the current directory)",
@@ -1228,6 +1517,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         bvh_rotation=args.bvh_rotation,
         avatar_name=args.avatar_name,
         hand_sns=tuple(args.hand_sns) if args.hand_sns else None,
+        auto_routes=not args.no_auto_routes,
         enable_motors=args.enable_motors,
         power_plot=args.power_plot,
         show_power_plot=not args.no_show_power_plot,

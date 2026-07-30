@@ -1,3 +1,4 @@
+import ipaddress
 from pathlib import Path
 from types import SimpleNamespace
 import sys
@@ -412,6 +413,7 @@ def test_default_cli_is_dry_run():
     assert args.udp_port == 8088
     assert args.bvh_rotation == "YXZ"
     assert args.hand_sns is None
+    assert not args.no_auto_routes
     assert not args.enable_motors
 
 
@@ -420,6 +422,132 @@ def test_cli_accepts_repeated_hand_serials():
         ["--hand-sn", "SN-A", "--hand-sn", "SN-B"]
     )
     assert args.hand_sns == ["SN-A", "SN-B"]
+
+
+def test_cli_can_disable_temporary_hand_routes():
+    args = bridge.build_argument_parser().parse_args(["--no-auto-routes"])
+    assert args.no_auto_routes
+
+
+def test_parse_device_ipv4_accepts_wuji_udp_addresses():
+    assert str(bridge.parse_device_ipv4("192.168.1.110:7447")) == "192.168.1.110"
+    assert bridge.parse_device_ipv4("not-an-address") is None
+    assert bridge.parse_device_ipv4("[2001:db8::1]:7447") is None
+
+
+def test_temporary_routes_map_each_hand_to_its_reachable_interface(monkeypatch):
+    routes = bridge.TemporaryHandRoutes()
+    routes.ip_command = "/usr/sbin/ip"
+    routes.ping_command = "/usr/bin/ping"
+    interfaces = [
+        bridge.InterfaceAddress(
+            name="enp1s0",
+            address=ipaddress.IPv4Address("192.168.1.10"),
+            network=ipaddress.IPv4Network("192.168.1.0/24"),
+        ),
+        bridge.InterfaceAddress(
+            name="enp2s0",
+            address=ipaddress.IPv4Address("192.168.1.20"),
+            network=ipaddress.IPv4Network("192.168.1.0/24"),
+        ),
+    ]
+    reachable = {
+        ("192.168.1.110", "enp1s0"),
+        ("192.168.1.111", "enp2s0"),
+    }
+    route_commands = []
+    monkeypatch.setattr(routes, "_interface_addresses", lambda: interfaces)
+    monkeypatch.setattr(
+        routes,
+        "_is_reachable",
+        lambda destination, interface: (str(destination), interface) in reachable,
+    )
+    monkeypatch.setattr(routes, "_exact_host_routes", lambda _destination: [])
+
+    def record_route_command(*arguments, check=True):
+        route_commands.append((arguments, check))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(routes, "_run_privileged", record_route_command)
+    devices = [
+        SimpleNamespace(address="192.168.1.110:7447"),
+        SimpleNamespace(address="192.168.1.111:7447"),
+    ]
+
+    routes.configure(devices)
+
+    assert route_commands == [
+        (
+            (
+                "route",
+                "replace",
+                "192.168.1.110/32",
+                "dev",
+                "enp1s0",
+                "src",
+                "192.168.1.10",
+            ),
+            True,
+        ),
+        (
+            (
+                "route",
+                "replace",
+                "192.168.1.111/32",
+                "dev",
+                "enp2s0",
+                "src",
+                "192.168.1.20",
+            ),
+            True,
+        ),
+    ]
+    assert routes.installed == [
+        bridge.InstalledRoute(
+            ipaddress.IPv4Address("192.168.1.110"), "enp1s0"
+        ),
+        bridge.InstalledRoute(
+            ipaddress.IPv4Address("192.168.1.111"), "enp2s0"
+        ),
+    ]
+
+    routes.restore()
+
+    assert route_commands[-2:] == [
+        (
+            ("route", "del", "192.168.1.111/32", "dev", "enp2s0"),
+            False,
+        ),
+        (
+            ("route", "del", "192.168.1.110/32", "dev", "enp1s0"),
+            False,
+        ),
+    ]
+    assert routes.installed == []
+
+
+def test_temporary_routes_fail_when_interface_probe_is_ambiguous(monkeypatch):
+    routes = bridge.TemporaryHandRoutes()
+    routes.ip_command = "/usr/sbin/ip"
+    routes.ping_command = "/usr/bin/ping"
+    interfaces = [
+        bridge.InterfaceAddress(
+            name=name,
+            address=ipaddress.IPv4Address(address),
+            network=ipaddress.IPv4Network("192.168.1.0/24"),
+        )
+        for name, address in (
+            ("enp1s0", "192.168.1.10"),
+            ("enp2s0", "192.168.1.20"),
+        )
+    ]
+    monkeypatch.setattr(routes, "_interface_addresses", lambda: interfaces)
+    monkeypatch.setattr(
+        routes, "_is_reachable", lambda _destination, _interface: False
+    )
+
+    with pytest.raises(bridge.ConfigurationError, match="cannot determine"):
+        routes.configure([SimpleNamespace(address="192.168.1.110:7447")])
 
 
 class EndTest(Exception):
@@ -509,7 +637,7 @@ def test_run_bridge_dry_run_never_prepares_or_enables_motors(monkeypatch):
         bridge.run_bridge(
             bridge.BridgeConfig(),
             source_factory=lambda _config, _sides: source,
-            target_factory=lambda _sns: target,
+            target_factory=lambda _sns, _auto_routes: target,
         )
 
     assert source.opened and source.closed
@@ -528,7 +656,7 @@ def test_motor_path_prepares_enables_sends_and_always_cleans_up(monkeypatch):
         bridge.run_bridge(
             bridge.BridgeConfig(enable_motors=True),
             source_factory=lambda _config, _sides: source,
-            target_factory=lambda _sns: target,
+            target_factory=lambda _sns, _auto_routes: target,
         )
 
     assert target.actions.index("prepare") < target.actions.index("enable")
@@ -549,7 +677,7 @@ def test_run_bridge_drives_both_hands(monkeypatch):
         bridge.run_bridge(
             bridge.BridgeConfig(enable_motors=True),
             source_factory=lambda _config, _sides: source,
-            target_factory=lambda _sns: target,
+            target_factory=lambda _sns, _auto_routes: target,
         )
 
     assert len(target.sent) == 1
@@ -563,7 +691,7 @@ def test_run_bridge_drives_both_hands(monkeypatch):
     assert target.closed and source.closed
 
 
-def test_preflight_recovers_from_a_tracking_gap(monkeypatch, caplog):
+def test_preflight_recovers_from_a_tracking_gap(monkeypatch):
     class GapSource(FakeSource):
         def __init__(self):
             super().__init__(
@@ -582,20 +710,24 @@ def test_preflight_recovers_from_a_tracking_gap(monkeypatch, caplog):
 
     source = GapSource()
     target = FakeTarget(("left",))
+    warnings = []
     monkeypatch.setattr(bridge, "FRAME_BUDGET_SECONDS", 0.0)
+    monkeypatch.setattr(
+        bridge.LOGGER,
+        "warning",
+        lambda message, *args: warnings.append(message % args),
+    )
 
-    with caplog.at_level("WARNING", logger="mocap_wuji_bridge"):
-        with pytest.raises(EndTest):
-            bridge.run_bridge(
-                bridge.BridgeConfig(),
-                source_factory=lambda _config, _sides: source,
-                target_factory=lambda _sns: target,
-            )
+    with pytest.raises(EndTest):
+        bridge.run_bridge(
+            bridge.BridgeConfig(),
+            source_factory=lambda _config, _sides: source,
+            target_factory=lambda _sns, _auto_routes: target,
+        )
 
     assert any(
-        "Tracking gap" in record.getMessage()
-        and "restarting calibration" in record.getMessage()
-        for record in caplog.records
+        "Tracking gap" in message and "restarting calibration" in message
+        for message in warnings
     )
     # The gap discarded the first five samples, so calibration needed a full
     # fresh window before the dry-run loop could reach stop_after.
@@ -689,7 +821,7 @@ def fake_wuji(monkeypatch):
 
 def test_connect_auto_detects_a_single_left_hand(fake_wuji):
     manager = fake_wuji([("SN-LEFT", "left")])
-    target = bridge.WujiTarget()
+    target = bridge.WujiTarget(auto_routes=False)
 
     assert target.connect() == ("left",)
     assert set(target.hands) == {"left"}
@@ -700,7 +832,7 @@ def test_connect_auto_detects_a_single_left_hand(fake_wuji):
 
 def test_connect_auto_detects_both_hands(fake_wuji):
     fake_wuji([("SN-RIGHT", "right"), ("SN-LEFT", "left")])
-    target = bridge.WujiTarget()
+    target = bridge.WujiTarget(auto_routes=False)
 
     assert target.connect() == ("left", "right")
     assert target.hands["left"].sn == "SN-LEFT"
@@ -708,27 +840,57 @@ def test_connect_auto_detects_both_hands(fake_wuji):
     assert target.hands["right"].session.side == FakeWujiModule.Handedness.Right
 
 
+def test_connect_configures_routes_before_devices_and_restores_after_disconnect(
+    fake_wuji,
+):
+    manager = fake_wuji([("SN-RIGHT", "right"), ("SN-LEFT", "left")])
+    actions = []
+
+    class FakeRoutes:
+        def configure(self, devices):
+            assert manager.connections == []
+            actions.append(("configure", [device.sn for device in devices]))
+
+        def restore(self):
+            assert manager.connections == []
+            actions.append(("restore", None))
+
+    target = bridge.WujiTarget(temporary_routes=FakeRoutes())
+
+    assert target.connect() == ("left", "right")
+    target.close()
+
+    assert actions == [
+        ("configure", ["SN-RIGHT", "SN-LEFT"]),
+        ("restore", None),
+    ]
+
+
 def test_connect_rejects_two_hands_with_the_same_side(fake_wuji):
     fake_wuji([("SN-A", "left"), ("SN-B", "left")])
     with pytest.raises(bridge.ConfigurationError, match="two left"):
-        bridge.WujiTarget().connect()
+        bridge.WujiTarget(auto_routes=False).connect()
 
 
 def test_connect_rejects_zero_hands(fake_wuji):
     fake_wuji([])
     with pytest.raises(bridge.ConfigurationError, match="no Wuji Hand 2"):
-        bridge.WujiTarget().connect()
+        bridge.WujiTarget(auto_routes=False).connect()
 
 
 def test_connect_requires_requested_serials_to_be_discovered(fake_wuji):
     fake_wuji([("SN-LEFT", "left")])
     with pytest.raises(bridge.ConfigurationError, match="SN-MISSING"):
-        bridge.WujiTarget(hand_sns=("SN-MISSING",)).connect()
+        bridge.WujiTarget(
+            hand_sns=("SN-MISSING",), auto_routes=False
+        ).connect()
 
 
 def test_connect_selects_only_the_requested_serial(fake_wuji):
     fake_wuji([("SN-RIGHT", "right"), ("SN-LEFT", "left")])
-    target = bridge.WujiTarget(hand_sns=("SN-RIGHT",))
+    target = bridge.WujiTarget(
+        hand_sns=("SN-RIGHT",), auto_routes=False
+    )
 
     assert target.connect() == ("right",)
     assert set(target.hands) == {"right"}

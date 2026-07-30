@@ -94,6 +94,15 @@ hand, selects the corresponding side(s) of the BVH avatar, and runs the
 complete retargeting pipeline for each connected hand. It does not configure
 the motors, enable the hands, or publish joint commands.
 
+When two hands are connected directly through separate Linux Ethernet
+interfaces on the same subnet, the bridge probes which interface reaches each
+hand and asks for `sudo` access to install a temporary `/32` route for each
+device. These routes are added before either hand is connected and removed
+after the hands are disabled and disconnected, including on errors or
+`Ctrl+C`. Use `--no-auto-routes` when routing is managed externally. For a
+permanent setup, configure per-hand routes in NetworkManager or connect both
+hands and the computer through one Ethernet switch.
+
 If more than one avatar is available, or you want specific hands, choose
 explicitly (`--hand-sn` may be repeated to pin both hands):
 
@@ -167,6 +176,10 @@ Run `python mocap_wuji_bridge.py --help` for the complete option list.
   does not arbitrarily choose left or right.
 - Two hands of the same side (or more than two devices) are rejected; pass
   `--hand-sn` (repeatable) to select the ones to use.
+- If two direct-attached NICs use the same subnet, allow the bridge's `sudo`
+  prompt so it can add per-hand `/32` routes. A capability query that succeeds
+  for one hand and times out for the other usually indicates that these routes
+  are missing.
 
 ### Interface or native-library errors
 
